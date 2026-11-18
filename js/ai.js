@@ -101,6 +101,22 @@ export class AiPlayer {
     return `go movetime ${Math.round(Math.max(MIN, Math.min(MAX, t)))}`;
   }
 
+  // 人間らしく見せるための考慮時間（ミリ秒）。Lv1〜9は探索がすぐ終わるので、この時間まで待ってから指す
+  paceMs(clock, side, ply) {
+    if (!this.cfg.nodes) return 0;
+    const base = [0, 1000, 1200, 1500, 2000, 2500, 3000, 3500, 4000, 4500][this.level];
+    let t = base;
+    if (clock && clock.enabled) {
+      const main = Math.max(0, clock.main[side]);
+      const byo = clock.byoyomi;
+      if (main > 0) t = Math.min(t, main / 40 + (byo ? byo * 0.2 : 0));
+      else t = Math.min(t, byo * 0.4);
+    }
+    if (ply <= 12) t *= 0.6; // 序盤はテンポよく
+    t *= 0.7 + Math.random() * 0.6; // 毎手同じ間にならないように
+    return Math.max(300, t);
+  }
+
   // 戻り値: { move, resign, info } / 中断されたら null
   async think(pos, clock) {
     const sfen = pos.toSfen();

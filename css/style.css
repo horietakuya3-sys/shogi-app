@@ -13,7 +13,7 @@
   --bad: #e0675a;
   --sel: rgba(224, 123, 57, 0.55);
   --dest: rgba(60, 140, 60, 0.45);
-  --last: rgba(255, 220, 120, 0.55);
+  --last: rgba(255, 128, 32, 0.62);
   --bw: min(calc(100vw - 40px), 460px);
   --cell: calc(var(--bw) / 9);
   font-family: system-ui, -apple-system, "Noto Sans JP", "Noto Sans CJK JP", sans-serif;
@@ -83,7 +83,8 @@ main { max-width: 520px; margin: 0 auto; padding: 6px 10px 20px; }
 .cell { position: relative; border-right: 1px solid var(--board-line); border-bottom: 1px solid var(--board-line); }
 .cell:nth-child(9n) { border-right: 0; }
 .cell:nth-child(n+73) { border-bottom: 0; }
-.cell.last { background: var(--last); }
+.cell.last { background: var(--last); box-shadow: inset 0 0 0 3px #e85d00; }
+.cell.lastfrom { background: rgba(255, 160, 60, 0.28); }
 .cell.sel { background: var(--sel); }
 .cell.dest::after {
   content: ""; position: absolute; inset: 32%; border-radius: 50%; background: var(--dest);
@@ -142,8 +143,11 @@ main { max-width: 520px; margin: 0 auto; padding: 6px 10px 20px; }
 .sheet {
   position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,0.5);
   display: flex; align-items: flex-end; justify-content: center;
+  overscroll-behavior: contain; touch-action: pan-y;
 }
+body.noscroll { overflow: hidden; }
 .sheet-inner {
+  max-height: 88vh; overflow-y: auto; overscroll-behavior: contain;
   width: 100%; max-width: 520px; background: var(--panel); border-radius: 14px 14px 0 0;
   padding: 12px 12px calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px;
 }
@@ -202,3 +206,29 @@ main { max-width: 520px; margin: 0 auto; padding: 6px 10px 20px; }
 .sheet-title { white-space: pre-line; text-align: center; }
 .review-move button.mini { margin-left: 8px; background: var(--accent); color: #fff; border: 0; border-radius: 12px; padding: 3px 10px; font-size: 13px; }
 .review-head select { font-size: 13px; padding: 3px 4px; border-radius: 6px; background: #1a140e; color: var(--text); border: 1px solid #555; }
+
+.sheet.full { align-items: stretch; }
+.sheet.full .sheet-inner { max-height: 100vh; height: 100%; border-radius: 0; }
+.pf-empty, .pf-sub { color: var(--muted); font-size: 14px; line-height: 1.6; }
+.pf-sec { margin: 6px 0 10px; }
+.pf-sec h3 { font-size: 15px; margin: 6px 0; color: #ffc98f; }
+.pf-big { font-size: 20px; font-weight: 700; }
+.pf-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pf-cell { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 8px 4px; text-align: center; }
+.pf-v { font-size: 18px; font-weight: 700; }
+.pf-k { font-size: 12px; color: var(--muted); }
+.pf-good { padding: 8px 10px; border-radius: 8px; background: rgba(127,196,122,0.18); margin-bottom: 6px; font-size: 14px; }
+.pf-weak { padding: 8px 10px; border-radius: 8px; background: rgba(224,103,90,0.18); margin-bottom: 6px; font-size: 14px; }
+.pf-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.pf-table th, .pf-table td { padding: 4px 6px; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.pf-table th:first-child, .pf-table td:first-child { text-align: left; }
+.pf-game { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); cursor: pointer; }
+.pf-gl { flex: 1; min-width: 0; }
+.pf-gt { font-size: 14px; }
+.pf-gs { font-size: 12px; color: var(--muted); }
+.pf-res { font-size: 14px; font-weight: 700; padding: 2px 10px; border-radius: 10px; background: rgba(255,255,255,0.08); }
+.pf-res.win { background: rgba(127,196,122,0.35); }
+.pf-res.lose { background: rgba(224,103,90,0.35); }
+.pf-io { display: flex; gap: 8px; }
+.pf-io button { flex: 1; text-align: center !important; font-size: 14px !important; }
+.playbar.practice { background: #22303b; }

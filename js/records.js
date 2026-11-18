@@ -1,0 +1,228 @@
+// 対局の記録（IndexedDB）と集計
+import { Position, SENTE, GOTE, typeOf, colorOf, moveToUsi, usiToMove } from './shogi.js';
+
+const DB_NAME = 'shogi-app';
+const DB_VER = 1;
+let dbp = null;
+
+function db() {
+  if (dbp) return dbp;
+  dbp = new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VER);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains('games')) d.createObjectStore('games', { keyPath: 'key' });
+      if (!d.objectStoreNames.contains('problems')) d.createObjectStore('problems', { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbp;
+}
+
+async function tx(store, mode, fn) {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const t = d.transaction(store, mode);
+    const st = t.objectStore(store);
+    let out;
+    Promise.resolve(fn(st)).then((v) => { out = v; });
+    t.oncomplete = () => resolve(out);
+    t.onerror = () => reject(t.error);
+  });
+}
+const reqP = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+
+export const getAllGames = () => tx('games', 'readonly', (st) => reqP(st.getAll()));
+export const getGame = (key) => tx('games', 'readonly', (st) => reqP(st.get(key)));
+export const putGame = (g) => tx('games', 'readwrite', (st) => reqP(st.put(g)));
+export const deleteGame = (key) => tx('games', 'readwrite', (st) => reqP(st.delete(key)));
+export const getAllProblems = () => tx('problems', 'readonly', (st) => reqP(st.getAll()));
+export const putProblem = (p) => tx('problems', 'readwrite', (st) => reqP(st.put(p)));
+export const deleteProblem = (id) => tx('problems', 'readwrite', (st) => reqP(st.delete(id)));
+
+// ---- 戦法の判定（序盤30手で飛車がどこへ行ったか、角交換があったか） ----
+export const STRATEGY_NAMES = {
+  ibisha: '居飛車', kakugawari: '角換わり', shiken: '四間飛車', sangen: '三間飛車',
+  naka: '中飛車', mukai: '向かい飛車', unknown: '不明',
+};
+
+export function detectStrategy(startSfen, moves, side) {
+  const pos = new Position(startSfen);
+  // 平手の初期配置からでなければ判定しない
+  const rookHome = side === SENTE ? 7 * 9 + 7 : 1 * 9 + 1; // ２八 / ８二
+  const rook = side === SENTE ? 'R' : 'r';
+  if (pos.board[rookHome] !== rook) return 'unknown';
+  let rookSq = rookHome;
+  let bishopTraded = false;
+  const limit = Math.min(moves.length, 40);
+  for (let i = 0; i < limit; i++) {
+    const m = moves[i].move;
+    const pc = m.drop ? null : pos.board[m.from];
+    const cap = m.drop ? null : pos.board[m.to];
+    if (cap && typeOf(cap).replace('+', '') === 'B' && i < 30) bishopTraded = true;
+    if (!m.drop && m.from === rookSq && pc === rook) {
+      // 振り飛車の判定は、飛車が横に動いて自陣（2段目／8段目）にいるとき
+      const row = Math.floor(m.to / 9);
+      const homeRow = side === SENTE ? 7 : 1;
+      if (row === homeRow) {
+        const file = 9 - (m.to % 9);
+        const f = side === SENTE ? file : 10 - file; // 先手から見た筋
+        const map = { 6: 'shiken', 7: 'sangen', 5: 'naka', 8: 'mukai' };
+        if (map[f]) return map[f];
+      }
+      rookSq = m.to;
+    } else if (!m.drop && m.from === rookSq) {
+      rookSq = -1; // 飛車を取られたなど
+    }
+    if (cap && m.to === rookSq) rookSq = -1;
+    pos.applyMove(m);
+  }
+  return bishopTraded ? 'kakugawari' : 'ibisha';
+}
+
+// ---- 1局分の記録を作る ----
+// game: { startSfen, moves, header, result, summary, meta }  review: { results, marks } or null
+export function buildRecord(game, review, extra = {}) {
+  const key = game.startSfen + '|' + game.moves.map((m) => moveToUsi(m.move)).join(' ');
+  const me = game.meta && game.meta.mySide != null ? game.meta.mySide : null;
+  const winner = resultWinner(game);
+  const rec = {
+    key,
+    date: extra.date || game.header['開始日時'] || new Date().toISOString(),
+    savedAt: Date.now(),
+    source: extra.source || 'import',
+    startSfen: game.startSfen,
+    moves: game.moves.map((m) => moveToUsi(m.move)),
+    header: game.header,
+    result: game.result,
+    summary: game.summary,
+    mySide: me,
+    winner, // 0 / 1 / null(引き分け・中断・不明)
+    outcome: me == null ? null : winner == null ? (game.result === '千日手' || game.result === '持将棋' ? 'draw' : 'none') : (winner === me ? 'win' : 'lose'),
+    myStrategy: me == null ? null : detectStrategy(game.startSfen, game.moves, me),
+    oppStrategy: me == null ? null : detectStrategy(game.startSfen, game.moves, 1 - me),
+    opponent: me == null ? '' : (me === SENTE ? game.header['後手'] : game.header['先手']) || '',
+    aiLevel: extra.aiLevel || null,
+    stats: null,
+  };
+  if (review && review.marks && me != null) {
+    const s = { moves: 0, bad: 0, dubious: 0, match: 0, missedMate: 0, blunderMate: 0 };
+    review.marks.forEach((m) => {
+      if (!m || m.side !== me) return;
+      s.moves++;
+      if (m.kind === '悪手') s.bad++;
+      if (m.kind === '疑問手') s.dubious++;
+      if (m.match) s.match++;
+      if (m.missedMate) s.missedMate++;
+      if (m.blunderMate) s.blunderMate++;
+    });
+    rec.stats = s;
+  }
+  return rec;
+}
+
+function resultWinner(game) {
+  const m = (game.summary || '').match(/(先手|後手|下手|上手)の勝ち/);
+  if (m) return m[1] === '先手' || m[1] === '下手' ? SENTE : GOTE;
+  // 「投了」などで勝敗の行がない棋譜: 投了したのは最後に指す番だった側
+  if (['投了', '詰み', '切れ負け', '時間切れ'].includes(game.result)) {
+    return game.moves.length % 2 === 0 ? (startTurn(game) === SENTE ? GOTE : SENTE) : startTurn(game);
+  }
+  return null;
+}
+function startTurn(game) { return new Position(game.startSfen).turn; }
+
+// 自分の悪手・疑問手を復習問題にする
+export function buildProblems(game, review, mySide) {
+  if (!review || !review.marks || mySide == null) return [];
+  const out = [];
+  const pos = [new Position(game.startSfen)];
+  for (const m of game.moves) { const p = pos[pos.length - 1].clone(); p.applyMove(m.move); pos.push(p); }
+  review.marks.forEach((m, i) => {
+    if (!m || !m.kind || m.side !== mySide || !m.best) return;
+    const before = pos[i - 1];
+    const sfen = before.toSfen();
+    out.push({
+      id: sfen + '|' + m.best,
+      sfen,
+      best: m.best,
+      played: moveToUsi(game.moves[i - 1].move),
+      prevTo: i > 1 ? game.moves[i - 2].move.to : null,
+      kind: m.kind,
+      note: m.note || '',
+      ply: i,
+      gameKey: game.startSfen + '|' + game.moves.map((x) => moveToUsi(x.move)).join(' '),
+      date: game.header['開始日時'] || '',
+      box: 0, // 正解するたびに増え、出題されにくくなる
+      tries: 0,
+      correct: 0,
+      lastAt: 0,
+    });
+  });
+  return out;
+}
+
+// ---- 集計 ----
+export function aggregate(games) {
+  const mine = games.filter((g) => g.mySide != null);
+  const decided = mine.filter((g) => g.outcome === 'win' || g.outcome === 'lose' || g.outcome === 'draw');
+  const cnt = (arr, f) => arr.filter(f).length;
+  const total = {
+    games: mine.length,
+    win: cnt(decided, (g) => g.outcome === 'win'),
+    lose: cnt(decided, (g) => g.outcome === 'lose'),
+    draw: cnt(decided, (g) => g.outcome === 'draw'),
+  };
+  const reviewed = mine.filter((g) => g.stats && g.stats.moves);
+  const sum = (arr, k) => arr.reduce((a, g) => a + g.stats[k], 0);
+  const q = reviewed.length ? {
+    games: reviewed.length,
+    moves: sum(reviewed, 'moves'),
+    badRate: sum(reviewed, 'bad') / sum(reviewed, 'moves'),
+    dubRate: sum(reviewed, 'dubious') / sum(reviewed, 'moves'),
+    matchRate: sum(reviewed, 'match') / sum(reviewed, 'moves'),
+    missedMate: sum(reviewed, 'missedMate'),
+    blunderMate: sum(reviewed, 'blunderMate'),
+  } : null;
+  const group = (keyFn) => {
+    const m = new Map();
+    for (const g of decided) {
+      const k = keyFn(g);
+      if (!k) continue;
+      const o = m.get(k) || { key: k, games: 0, win: 0, lose: 0, draw: 0 };
+      o.games++; o[g.outcome]++;
+      m.set(k, o);
+    }
+    return [...m.values()].map((o) => ({ ...o, rate: o.win / Math.max(1, o.win + o.lose) })).sort((a, b) => b.games - a.games);
+  };
+  const byMy = group((g) => g.myStrategy);
+  const byOpp = group((g) => g.oppStrategy);
+  const byLevel = group((g) => (g.aiLevel ? `Lv${g.aiLevel}` : null));
+  // 得意戦法: 3局以上指した中で勝率が最も高いもの
+  const fav = byMy.filter((o) => o.games >= 3).sort((a, b) => b.rate - a.rate)[0] || byMy[0] || null;
+
+  // 苦手（数字つきの指摘）
+  const weak = [];
+  const worstOpp = byOpp.filter((o) => o.games >= 3).sort((a, b) => a.rate - b.rate)[0];
+  if (worstOpp && worstOpp.rate < 0.5) weak.push({ score: 1 - worstOpp.rate, text: `対${STRATEGY_NAMES[worstOpp.key]}の勝率が${pct(worstOpp.rate)}（${worstOpp.games}局）` });
+  const worstMy = byMy.filter((o) => o.games >= 3).sort((a, b) => a.rate - b.rate)[0];
+  if (worstMy && worstMy.rate < 0.5 && (!fav || worstMy.key !== fav.key)) weak.push({ score: 0.9 - worstMy.rate, text: `自分の${STRATEGY_NAMES[worstMy.key]}の勝率が${pct(worstMy.rate)}（${worstMy.games}局）` });
+  const recent = reviewed.slice().sort((a, b) => b.savedAt - a.savedAt).slice(0, 10);
+  const rm = recent.reduce((a, g) => a + g.stats.missedMate, 0);
+  if (rm) weak.push({ score: 0.6 + rm * 0.1, text: `直近${recent.length}局で詰みの見逃しが${rm}回` });
+  const rb = recent.reduce((a, g) => a + g.stats.blunderMate, 0);
+  if (rb) weak.push({ score: 0.6 + rb * 0.1, text: `直近${recent.length}局で詰まされる手（頓死）が${rb}回` });
+  // 悪手率の推移
+  if (reviewed.length >= 6) {
+    const sorted = reviewed.slice().sort((a, b) => a.savedAt - b.savedAt);
+    const half = Math.floor(sorted.length / 2);
+    const rate = (arr) => arr.reduce((a, g) => a + g.stats.bad, 0) / Math.max(1, arr.reduce((a, g) => a + g.stats.moves, 0));
+    const r1 = rate(sorted.slice(0, half)), r2 = rate(sorted.slice(half));
+    if (r2 > r1 * 1.2) weak.push({ score: 0.5, text: `最近の悪手率が${pct(r2)}で、前半の${pct(r1)}より増えている` });
+  }
+  weak.sort((a, b) => b.score - a.score);
+  return { total, q, byMy, byOpp, byLevel, fav, weak: weak.slice(0, 3) };
+}
+
+export const pct = (x) => `${Math.round(x * 100)}%`;

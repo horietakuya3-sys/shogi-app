@@ -6,6 +6,12 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES } from './ai.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
+import { playPieceSound, unlockAudio } from './sound.js';
+import {
+  getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
+  buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES,
+} from './records.js';
+import { value as lineValue } from './ai.js';
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'shogi-app:v1';
@@ -22,6 +28,7 @@ const state = {
   analyze: false, // 起動時は解析しない（解析ボタンで始める）
   multipv: 3,
   reviewDepth: 'normal',
+  sound: true,
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -75,8 +82,12 @@ function guessMySide(h = {}) {
   return null;
 }
 
+function sound() { if (state.sound) { try { playPieceSound(); } catch { /* 無視 */ } } }
+
 function playMove(mv) {
   if (state.mode === 'play') { playTurnMove(mv); return; }
+  if (state.mode === 'practice') { answerPractice(mv); return; }
+  sound();
   const ln = line();
   const next = ln[state.cursor];
   if (next && sameMove(next.move, mv)) { // 次の手と同じなら進むだけ
@@ -98,7 +109,7 @@ function playMove(mv) {
 }
 
 function goTo(n) {
-  if (state.mode === 'play') return;
+  if (state.mode === 'play' || state.mode === 'practice') return;
   const max = line().length;
   state.cursor = Math.max(0, Math.min(max, n));
   state.selected = null;
@@ -174,7 +185,8 @@ function renderBoard() {
     const el = cells[d];
     el.innerHTML = '';
     let cls = 'cell';
-    if (last && (last.to === idx || last.from === idx)) cls += ' last';
+    if (last && last.to === idx) cls += ' last';
+    else if (last && last.from === idx) cls += ' lastfrom';
     if (state.selected && state.selected.from === idx) cls += ' sel';
     if (dests.has(idx)) cls += ' dest' + (pos.board[idx] ? ' occupied' : '');
     el.className = cls;
@@ -275,7 +287,7 @@ function renderControls() {
   const cm = n > 0 ? ln[n - 1].comment : '';
   $('comment').textContent = cm || '';
   $('comment').classList.toggle('hidden', !cm);
-  const playing = state.mode === 'play';
+  const playing = state.mode === 'play' || state.mode === 'practice';
   for (const id of ['btnFirst', 'btnPrev', 'btnNext', 'btnLast']) $(id).disabled = playing;
 }
 
@@ -395,6 +407,7 @@ function aiThinkingTurn() {
 
 function requestAnalysis() {
   if (!state.engineReady) return;
+  if (state.mode === 'practice') return; // 復習中は答えが見えないようにエンジンを止めておく
   if (aiThinkingTurn()) {
     state.candidates = [];
     renderArrows();
@@ -579,6 +592,7 @@ function tickClock() {
 }
 
 function canHumanMove() {
+  if (state.mode === 'practice') return state.practice && state.practice.phase === 'ask';
   if (state.mode !== 'play') return true;
   const p = state.play;
   return !p.over && p.players[curPos().turn].type === 'human';
@@ -591,6 +605,7 @@ function playTurnMove(mv) {
   const c = p.clock;
   if (c.enabled) c.main[side] = Math.max(0, c.main[side] - elapsedNow());
   c.turnStart = performance.now();
+  sound();
   state.game.moves.push({ move: mv, comment: '' });
   state.cursor = state.game.moves.length;
   state.selected = null;
@@ -619,15 +634,17 @@ async function nextTurn() {
   const id = ++p.thinkId;
   const t0 = performance.now();
   const pos = curPos().clone();
-  const res = await pl.ai.think(pos, p.clock.enabled ? {
+  const clk = p.clock.enabled ? {
     enabled: true,
     main: [p.clock.main[0] - (side === 0 ? elapsedNow() : 0), p.clock.main[1] - (side === 1 ? elapsedNow() : 0)],
     byoyomi: p.clock.byoyomi,
-  } : null);
+  } : null;
+  const pace = pl.ai.paceMs(clk, side, pos.ply);
+  const res = await pl.ai.think(pos, clk);
   if (!res || state.play !== p || p.over || p.thinkId !== id) return;
   // 一瞬で指すと不自然なので少し待つ（AI同士は観戦しやすい間隔）
   const bothAi = p.players.every((x) => x.type === 'ai');
-  const minWait = bothAi ? 700 : 400;
+  const minWait = Math.max(bothAi ? 700 : 400, pace);
   const waited = performance.now() - t0;
   if (waited < minWait) await new Promise((r) => setTimeout(r, minWait - waited));
   if (state.play !== p || p.over || p.thinkId !== id) return;
@@ -658,6 +675,9 @@ function endPlay(word, winner) {
     const hs = p.players.findIndex((x) => x.type === 'human');
     head = (hs === winner ? 'あなたの勝ち' : 'あなたの負け') + `（${word}）`;
   }
+  // 対局の記録を残す（局後解析をすると内容が追加される）
+  const aiP = p.players.find((x) => x.type === 'ai');
+  saveRecord('play', humans.length === 1 && aiP ? aiP.level : null);
   state.play = null;
   $('endText').textContent = head === state.game.summary ? head : `${head}\n${state.game.summary}`;
   $('endSheet').classList.remove('hidden');
@@ -754,6 +774,7 @@ async function startReview() {
     r.results = res;
     r.marks = judgeMoves(state.game.startSfen, state.game.moves, res);
     saveReview();
+    saveRecord(null, null);
     const s = summarize(r.marks);
     const ms = mySide();
     toast(ms == null ? `解析が終わりました（悪手 ☗${s[0].bad} ☖${s[1].bad}）` : `解析が終わりました（あなたの悪手 ${s[ms].bad}・疑問手 ${s[ms].dubious}）`);
@@ -892,6 +913,307 @@ function jumpMistake(dir) {
   toast(dir > 0 ? `この先に${who}悪手・疑問手はありません` : `この前に${who}悪手・疑問手はありません`);
 }
 
+// ---- 対局の記録 ----
+async function saveRecord(source, aiLevel) {
+  if (!state.game.moves.length) return;
+  try {
+    const r = state.review;
+    const hasReview = r.key === gameKey() && r.results.length && r.results.every(Boolean) && r.results.length === state.game.moves.length + 1;
+    const rec = buildRecord(state.game, hasReview ? r : null, { source: source || undefined, aiLevel });
+    const old = await getGame(rec.key);
+    if (old) {
+      rec.source = source || old.source;
+      rec.aiLevel = aiLevel || old.aiLevel;
+      rec.date = old.date || rec.date;
+      rec.savedAt = old.savedAt;
+      if (!rec.stats && old.stats) rec.stats = old.stats;
+      if (!hasReview && old.results) rec.results = old.results;
+    }
+    if (!old && !source && rec.mySide == null) return; // 取り込んだ棋譜で自分の側が不明なものは記録しない
+    if (hasReview) rec.results = r.results.map((x) => ({ score: x.score, best: x.best, pv: (x.pv || []).slice(0, 6) }));
+    await putGame(rec);
+    if (hasReview && rec.mySide != null) {
+      const have = new Set((await getAllProblems()).map((x) => x.id));
+      for (const pb of buildProblems(state.game, r, rec.mySide)) if (!have.has(pb.id)) await putProblem(pb);
+    }
+  } catch (e) { console.error('記録の保存に失敗', e); }
+}
+
+// ---- プロフィール ----
+const OUT_JA = { win: '勝ち', lose: '負け', draw: '引き分け', none: '中断' };
+async function openProfile() {
+  const sheet = $('profileSheet');
+  sheet.classList.remove('hidden');
+  const body = $('profileBody');
+  body.textContent = '集計しています…';
+  let games = [], probs = [];
+  try { [games, probs] = await Promise.all([getAllGames(), getAllProblems()]); } catch { body.textContent = '記録を読み込めませんでした'; return; }
+  const a = aggregate(games);
+  const todo = probs.filter((x) => x.box < 5).length;
+  $('btnProfilePractice').textContent = `復習を始める（残り${todo}問）`;
+  const el = (tag, cls, text) => { const d = document.createElement(tag); if (cls) d.className = cls; if (text != null) d.textContent = text; return d; };
+  body.innerHTML = '';
+  if (!a.total.games) {
+    body.appendChild(el('div', 'pf-empty', 'まだ記録がありません。AIと対局するか、自分の対局の棋譜を読み込んで局後解析すると、ここに集計されます。'));
+    return;
+  }
+  // 戦績
+  const t = a.total;
+  const sec = (title) => { const s = el('section', 'pf-sec'); s.appendChild(el('h3', null, title)); body.appendChild(s); return s; };
+  const s1 = sec('戦績');
+  const wl = t.win + t.lose;
+  s1.appendChild(el('div', 'pf-big', `${t.win}勝 ${t.lose}敗` + (t.draw ? ` ${t.draw}分` : '') + (wl ? `　勝率 ${pct(t.win / wl)}` : '')));
+  s1.appendChild(el('div', 'pf-sub', `記録した対局 ${t.games}局`));
+  // 指し手の質
+  const s2 = sec('指し手の質');
+  if (a.q) {
+    const grid = el('div', 'pf-grid');
+    const cell = (k, v) => { const c = el('div', 'pf-cell'); c.appendChild(el('div', 'pf-v', v)); c.appendChild(el('div', 'pf-k', k)); grid.appendChild(c); };
+    cell('悪手率', pct(a.q.badRate));
+    cell('疑問手率', pct(a.q.dubRate));
+    cell('最善手一致率', pct(a.q.matchRate));
+    cell('詰みの見逃し', `${a.q.missedMate}回`);
+    cell('頓死', `${a.q.blunderMate}回`);
+    cell('解析した対局', `${a.q.games}局`);
+    s2.appendChild(grid);
+  } else {
+    s2.appendChild(el('div', 'pf-sub', '局後解析した対局がまだありません'));
+  }
+  // 得意・苦手
+  const s3 = sec('得意と苦手');
+  if (a.fav) s3.appendChild(el('div', 'pf-good', `得意戦法: ${STRATEGY_NAMES[a.fav.key]}（${a.fav.win}勝${a.fav.lose}敗、勝率 ${pct(a.fav.rate)}）`));
+  if (a.weak.length) a.weak.forEach((w) => s3.appendChild(el('div', 'pf-weak', w.text)));
+  else s3.appendChild(el('div', 'pf-sub', '目立った苦手はまだ見つかっていません（対局が増えると見えてきます）'));
+  // 戦法別
+  const table = (title, rows, nameFn) => {
+    if (!rows.length) return;
+    const s = sec(title);
+    const tb = el('table', 'pf-table');
+    tb.innerHTML = '<tr><th></th><th>局</th><th>勝</th><th>敗</th><th>勝率</th></tr>';
+    for (const o of rows) {
+      const tr = document.createElement('tr');
+      for (const v of [nameFn(o.key), o.games, o.win, o.lose, o.win + o.lose ? pct(o.rate) : '-']) tr.appendChild(el('td', null, String(v)));
+      tb.appendChild(tr);
+    }
+    s.appendChild(tb);
+  };
+  table('自分の戦法別', a.byMy, (k) => STRATEGY_NAMES[k] || k);
+  table('相手の戦法別', a.byOpp, (k) => STRATEGY_NAMES[k] || k);
+  table('AIのレベル別', a.byLevel, (k) => k);
+  // 戦歴
+  const s6 = sec('戦歴（新しい順）');
+  const list = games.filter((g) => g.mySide != null).sort((x, y) => y.savedAt - x.savedAt).slice(0, 50);
+  for (const g of list) {
+    const row = el('div', 'pf-game');
+    const left = el('div', 'pf-gl');
+    left.appendChild(el('div', 'pf-gt', `${(g.date || '').slice(0, 16)}　${g.mySide === 0 ? '☗' : '☖'} 対 ${g.opponent || '相手'}`));
+    const info = [`${g.moves.length}手`, STRATEGY_NAMES[g.myStrategy] || '', `相手 ${STRATEGY_NAMES[g.oppStrategy] || ''}`];
+    if (g.stats) info.push(`悪手${g.stats.bad}・疑問手${g.stats.dubious}`);
+    else info.push('未解析');
+    left.appendChild(el('div', 'pf-gs', info.join('・')));
+    row.appendChild(left);
+    row.appendChild(el('div', 'pf-res ' + (g.outcome || ''), OUT_JA[g.outcome] || '-'));
+    row.onclick = () => openRecord(g);
+    s6.appendChild(row);
+  }
+}
+
+function openRecord(g) {
+  $('profileSheet').classList.add('hidden');
+  const moves = g.moves.map((u) => ({ move: usiToMove(u), comment: '' }));
+  loadGame({ startSfen: g.startSfen, moves, header: g.header, result: g.result, summary: g.summary }, { silent: true });
+  state.game.meta = { mySide: g.mySide };
+  if (g.results && g.results.length === moves.length + 1) {
+    const r = state.review;
+    r.key = gameKey();
+    r.results = g.results;
+    r.marks = judgeMoves(state.game.startSfen, state.game.moves, r.results);
+    saveReview();
+  }
+  state.flipped = g.mySide === GOTE;
+  update();
+  toast(g.results ? '解析結果つきで開きました' : '開きました。メニューから局後解析できます');
+}
+
+async function exportData() {
+  try {
+    const data = { app: 'shogi-app', version: 1, exportedAt: new Date().toISOString(), games: await getAllGames(), problems: await getAllProblems() };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `shogi-app-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch { toast('書き出せませんでした'); }
+}
+
+async function importData(text) {
+  try {
+    const d = JSON.parse(text);
+    if (d.app !== 'shogi-app') throw new Error('形式が違います');
+    for (const g of d.games || []) await putGame(g);
+    for (const p of d.problems || []) await putProblem(p);
+    toast(`読み込みました（対局${(d.games || []).length}局、問題${(d.problems || []).length}問）`);
+    openProfile();
+  } catch (e) { toast('読み込めませんでした: ' + e.message); }
+}
+
+// ---- 復習（悪手を指した局面のやり直し） ----
+const MASTERED = 5;
+async function startPractice() {
+  if (!state.engineReady) { toast('エンジンの準備ができてから始めてください'); return; }
+  if (state.mode === 'play') return;
+  let probs = [];
+  try { probs = await getAllProblems(); } catch { /* 無視 */ }
+  let pool = probs.filter((x) => x.box < MASTERED);
+  if (!pool.length) pool = probs;
+  if (!pool.length) { toast('復習する局面がまだありません。対局後に局後解析すると、自分の悪手・疑問手が問題になります'); return; }
+  // 間違えた回数が多い（箱が小さい）ものほど先に。同じ箱の中はばらばらに
+  pool.sort((a, b) => (a.box - b.box) || (Math.random() - 0.5));
+  stopReview();
+  engine.stop();
+  state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
+  state.mode = 'practice';
+  state.practice = { queue: pool.slice(0, 10), idx: -1, phase: 'ask', item: null, judge: null, right: 0 };
+  $('practiceBar').classList.remove('hidden');
+  nextPractice();
+}
+
+function nextPractice() {
+  const pr = state.practice;
+  if (!pr) return;
+  pr.idx++;
+  if (pr.idx >= pr.queue.length) {
+    toast(`復習おわり（${pr.queue.length}問中 ${pr.right}問正解）`, 3500);
+    endPractice();
+    return;
+  }
+  const it = pr.queue[pr.idx];
+  pr.item = it;
+  pr.phase = 'ask';
+  pr.lines = null;
+  state.game = { startSfen: it.sfen, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
+  state.branch = null;
+  state.cursor = 0;
+  state.selected = null;
+  const pos = new Position(it.sfen);
+  state.flipped = pos.turn === GOTE;
+  // 判定用の解析を先に始めておく
+  pr.judge = engine.searchOnce({ sfen: it.sfen, multipv: 5, go: 'go movetime 2000' });
+  const playedJa = moveToJa(pos, usiToMove(it.played), it.prevTo);
+  $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　実戦では ${playedJa}（${it.note || it.kind}）。もっと良い手を指してください`;
+  $('btnPracticeShow').classList.remove('hidden');
+  $('btnPracticeNext').classList.add('hidden');
+  renderCandidates([], `${pos.turn === SENTE ? '☗先手' : '☖後手'}の番です。盤上で指してください`);
+  update();
+}
+
+async function answerPractice(mv) {
+  const pr = state.practice;
+  if (!pr || pr.phase !== 'ask') return;
+  sound();
+  pr.phase = 'judging';
+  const it = pr.item;
+  const pos = new Position(it.sfen);
+  state.game.moves = [{ move: mv, comment: '' }];
+  state.cursor = 1;
+  state.selected = null;
+  update();
+  renderCandidates([], '判定しています…');
+  const u = moveToUsi(mv);
+  const res = await pr.judge;
+  if (state.practice !== pr) return;
+  let lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]) : [];
+  const bestV = lines.length ? Math.max(...lines.map(lineValue)) : 0;
+  let myV = null;
+  const hit = lines.find((l) => l.pv[0] === u);
+  if (hit) myV = lineValue(hit);
+  else if (u === it.best) myV = bestV;
+  else {
+    const p2 = pos.clone();
+    p2.applyMove(mv);
+    if (!p2.legalMoves().length) myV = 99999; // 詰ませた
+    else {
+      const r2 = await engine.searchOnce({ sfen: p2.toSfen(), multipv: 1, go: 'go movetime 1000' });
+      if (state.practice !== pr) return;
+      if (r2 && r2.lines[0]) myV = -lineValue(r2.lines[0]);
+    }
+  }
+  const loss = myV == null ? 9999 : Math.max(0, bestV - myV);
+  const ok = u === it.best || loss <= 80;
+  pr.lines = lines;
+  pr.phase = 'done';
+  if (ok) pr.right++;
+  // 出題の頻度を更新
+  const upd = { ...it, tries: it.tries + 1, correct: it.correct + (ok ? 1 : 0), box: ok ? Math.min(MASTERED, it.box + 1) : 0, lastAt: Date.now() };
+  try { await putProblem(upd); } catch { /* 無視 */ }
+  const myJa = moveToJa(pos, mv, it.prevTo);
+  // 最善手は、いま深く読んだ結果を優先して示す
+  const bestU = lines[0] ? lines[0].pv[0] : it.best;
+  const bestJa = moveToJa(pos, usiToMove(bestU), it.prevTo);
+  const head = ok
+    ? (u === bestU ? `正解！ ${myJa}は最善手です` : `正解！ ${myJa}も好手です（最善は${bestJa}）`)
+    : `${u === it.played ? '実戦と同じ手です' : '惜しい'}。${myJa}は最善より${loss >= 9999 ? '大きく' : loss}損。最善は${bestJa}`;
+  $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　${head}`;
+  $('btnPracticeShow').classList.add('hidden');
+  $('btnPracticeNext').classList.remove('hidden');
+  revealCandidates(pos, lines);
+}
+
+function revealCandidates(pos, lines) {
+  // 出題局面での候補手を見せる（盤は指した後の局面なので、表示だけ問題の局面で作る）
+  const el = $('candidates');
+  el.innerHTML = '';
+  lines.forEach((ln, i) => {
+    const s = senteScore(ln, pos.turn);
+    const row = document.createElement('div');
+    row.className = 'cand' + (i === 0 ? ' first' : '');
+    row.innerHTML = '<span class="no"></span><span class="mv"></span><span class="sc"></span><span class="pv"></span>';
+    const ja = pvToJa(pos, ln.pv, state.practice ? state.practice.item.prevTo : null);
+    row.querySelector('.no').textContent = i + 1;
+    row.querySelector('.mv').textContent = ja[0] || '';
+    row.querySelector('.sc').textContent = fmtScore(s);
+    row.querySelector('.pv').textContent = ja.slice(1).join(' ');
+    el.appendChild(row);
+  });
+  if (lines[0]) setEval(senteScore(lines[0], pos.turn), lines[0].depth);
+}
+
+async function revealPractice() {
+  const pr = state.practice;
+  if (!pr || pr.phase !== 'ask') return;
+  pr.phase = 'judging';
+  renderCandidates([], '解析しています…');
+  const res = await pr.judge;
+  if (state.practice !== pr) return;
+  const it = pr.item;
+  const pos = new Position(it.sfen);
+  const lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]) : [];
+  pr.phase = 'done';
+  const upd = { ...it, tries: it.tries + 1, box: 0, lastAt: Date.now() };
+  try { await putProblem(upd); } catch { /* 無視 */ }
+  const bestU = lines[0] ? lines[0].pv[0] : it.best;
+  $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　答え: ${moveToJa(pos, usiToMove(bestU), it.prevTo)}`;
+  $('btnPracticeShow').classList.add('hidden');
+  $('btnPracticeNext').classList.remove('hidden');
+  revealCandidates(pos, lines);
+}
+
+function endPractice() {
+  if (state.mode !== 'practice') return;
+  state.practice = null;
+  state.mode = 'study';
+  engine.stop();
+  $('practiceBar').classList.add('hidden');
+  const sv = state.saved;
+  if (sv) {
+    state.game = sv.game; state.branch = sv.branch; state.cursor = sv.cursor; state.flipped = sv.flipped;
+    loadReviewFor();
+  }
+  state.saved = null;
+  update();
+}
+
 // ---- 操作 ----
 function onCellTap(idx) {
   if (!canHumanMove()) return;
@@ -986,34 +1308,25 @@ function persist() {
       flipped: state.flipped,
       multipv: state.multipv,
       reviewDepth: state.reviewDepth,
+      sound: state.sound,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
 }
 
+// 設定だけを読み戻す。盤は毎回、平手の初形から始める
 function restore() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return;
-    const s = JSON.parse(raw);
-    state.game = {
-      startSfen: s.startSfen,
-      moves: s.moves.map(([u, c]) => ({ move: usiToMove(u), comment: c || '' })),
-      header: s.header || {},
-      result: s.result || '',
-      summary: s.summary || '',
-      meta: s.meta || { mySide: guessMySide(s.header) },
-    };
-    state.branch = s.branch ? { base: s.branch.base, moves: s.branch.moves.map((u) => ({ move: usiToMove(u), comment: '' })) } : null;
-    state.flipped = !!s.flipped;
-    state.multipv = s.multipv || 3;
-    state.reviewDepth = s.reviewDepth || 'normal';
-    positions(); // 検証も兼ねる
-    state.cursor = Math.min(s.cursor || 0, line().length);
-  } catch {
-    state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '' };
-    state.branch = null;
-    state.cursor = 0;
-  }
+    if (raw) {
+      const s = JSON.parse(raw);
+      state.multipv = s.multipv || 3;
+      state.reviewDepth = s.reviewDepth || 'normal';
+      state.sound = s.sound !== false;
+    }
+  } catch { /* 無視 */ }
+  state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
+  state.branch = null;
+  state.cursor = 0;
   loadReviewFor();
 }
 
@@ -1065,6 +1378,7 @@ function bindUi() {
   const menu = $('menuSheet');
   $('btnMenu').onclick = () => {
     if (state.mode === 'play') { toast('対局中はメニューを使えません。終えるときは中断を押してください'); return; }
+    if (state.mode === 'practice') { toast('復習中です。終えるときは終了を押してください'); return; }
     menu.classList.remove('hidden');
   };
   menu.addEventListener('click', async (e) => {
@@ -1074,6 +1388,8 @@ function bindUi() {
     menu.classList.add('hidden');
     if (act === 'play') { setupPlaySheet(); $('playSheet').classList.remove('hidden'); }
     if (act === 'review') startReview();
+    if (act === 'profile') openProfile();
+    if (act === 'practice') startPractice();
     if (act === 'openFile') $('fileInput').click();
     if (act === 'paste') { $('pasteSheet').classList.remove('hidden'); $('pasteText').focus(); }
     if (act === 'saveKif') saveKif();
@@ -1085,6 +1401,12 @@ function bindUi() {
   });
   $('selMultiPV').value = String(state.multipv);
   $('selMultiPV').onchange = (e) => { state.multipv = Number(e.target.value); persist(); requestAnalysis(); };
+  $('chkSound').checked = state.sound;
+  $('chkSound').onchange = (e) => { state.sound = e.target.checked; persist(); if (state.sound) sound(); };
+  // シートを開いている間は後ろの画面をスクロールさせない
+  const lock = () => document.body.classList.toggle('noscroll', !!document.querySelector('.sheet:not(.hidden)'));
+  const mo = new MutationObserver(lock);
+  document.querySelectorAll('.sheet').forEach((el) => mo.observe(el, { attributes: true, attributeFilter: ['class'] }));
   $('selReviewDepth').value = state.reviewDepth;
   $('selReviewDepth').onchange = (e) => { state.reviewDepth = e.target.value; persist(); };
   $('fileInput').onchange = (e) => {
@@ -1123,6 +1445,16 @@ function bindUi() {
     $(id).addEventListener('click', (e) => { if (e.target === $(id)) $(id).classList.add('hidden'); });
   }
 
+  // プロフィール・復習
+  $('btnProfileClose').onclick = () => $('profileSheet').classList.add('hidden');
+  $('btnProfilePractice').onclick = () => { $('profileSheet').classList.add('hidden'); startPractice(); };
+  $('btnExport').onclick = exportData;
+  $('btnImport').onclick = () => $('importInput').click();
+  $('importInput').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importData(await f.text()); };
+  $('btnPracticeShow').onclick = () => revealPractice();
+  $('btnPracticeNext').onclick = () => nextPractice();
+  $('btnPracticeEnd').onclick = () => endPractice();
+
   // 局後解析
   $('btnReviewStop').onclick = stopReview;
   $('selReviewSide').onchange = (e) => {
@@ -1159,6 +1491,7 @@ function confirmSheetless(msg) {
 }
 
 async function main() {
+  unlockAudio();
   restore();
   buildBoard();
   bindUi();
