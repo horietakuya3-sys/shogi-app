@@ -61,6 +61,19 @@ const curPos = () => positions()[state.cursor];
 const prevMove = () => (state.cursor > 0 ? line()[state.cursor - 1].move : null);
 const gameKey = () => state.game.startSfen + '|' + state.game.moves.map((m) => moveToUsi(m.move)).join(' ');
 const onMainline = () => !state.branch || state.cursor <= state.branch.base;
+// 復習の対象にする側（自分の指し手）。null なら両方
+const mySide = () => (state.game.meta && state.game.meta.mySide != null ? state.game.meta.mySide : null);
+const isMine = (side) => mySide() == null || side === mySide();
+const AI_NAME = /(ぴよ|AI|Lv|レベル|ＣＰＵ|CPU|コンピュータ|やねうら|水匠|elmo|ponanza|bonanza|技巧|dlshogi)/i;
+function guessMySide(h = {}) {
+  const s = h['先手'] || h['下手'] || '', g = h['後手'] || h['上手'] || '';
+  const me = /^(あなた|自分|わたし|私|you)$/i;
+  if (me.test(s.trim())) return 0;
+  if (me.test(g.trim())) return 1;
+  if (AI_NAME.test(g) && !AI_NAME.test(s)) return 0;
+  if (AI_NAME.test(s) && !AI_NAME.test(g)) return 1;
+  return null;
+}
 
 function playMove(mv) {
   if (state.mode === 'play') { playTurnMove(mv); return; }
@@ -100,7 +113,10 @@ function backToMainline() {
 }
 
 function loadGame(g, { silent = false } = {}) {
-  state.game = { startSfen: g.startSfen, moves: g.moves, header: g.header || {}, result: g.result || '', summary: g.summary || '' };
+  state.game = {
+    startSfen: g.startSfen, moves: g.moves, header: g.header || {}, result: g.result || '', summary: g.summary || '',
+    meta: { mySide: guessMySide(g.header) },
+  };
   state.branch = null;
   state.cursor = 0;
   state.selected = null;
@@ -271,7 +287,8 @@ function renderMoveList() {
   ln.forEach((m, i) => {
     const s = document.createElement('span');
     const inBranch = state.branch && i >= state.branch.base;
-    const mk = !inBranch && state.review.key === gameKey() ? state.review.marks[i + 1] : null;
+    let mk = !inBranch && state.review.key === gameKey() ? state.review.marks[i + 1] : null;
+    if (mk && !isMine(mk.side)) mk = null;
     s.className = 'm' + (i + 1 === state.cursor ? ' cur' : '') + (inBranch ? ' branch' : '')
       + (mk && mk.kind === '悪手' ? ' bad' : mk && mk.kind === '疑問手' ? ' dub' : '');
     s.textContent = `${i + 1} ${moveToJa(ps[i], m.move, i > 0 ? ln[i - 1].move.to : null)}`;
@@ -284,8 +301,13 @@ function renderMoveList() {
     r.textContent = state.game.summary || state.game.result;
     el.appendChild(r);
   }
+  // 棋譜の枠の中だけをスクロールする（画面全体は動かさない）
   const cur = el.querySelector('.cur');
-  if (cur) cur.scrollIntoView({ block: 'nearest' });
+  if (cur) {
+    const top = cur.offsetTop;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + cur.offsetHeight > el.scrollTop + el.clientHeight) el.scrollTop = top + cur.offsetHeight - el.clientHeight;
+  }
 }
 
 // 評価値（先手から見た値）
@@ -478,6 +500,7 @@ function startPlay(cfg, fromHere) {
     },
     result: '',
     summary: '',
+    meta: { mySide: humans === 1 ? players.findIndex((x) => x.type === 'human') : null },
   };
   state.branch = null;
   state.cursor = 0;
@@ -722,7 +745,8 @@ async function startReview() {
     r.marks = judgeMoves(state.game.startSfen, state.game.moves, res);
     saveReview();
     const s = summarize(r.marks);
-    toast(`解析が終わりました（悪手 ☗${s[0].bad} ☖${s[1].bad}）`);
+    const ms = mySide();
+    toast(ms == null ? `解析が終わりました（悪手 ☗${s[0].bad} ☖${s[1].bad}）` : `解析が終わりました（あなたの悪手 ${s[ms].bad}・疑問手 ${s[ms].dubious}）`);
   }
   update();
 }
@@ -748,6 +772,7 @@ function renderReview() {
   $('reviewProgress').classList.toggle('hidden', !r.running);
   $('reviewProgressFill').style.width = `${(r.done / total) * 100}%`;
   $('btnReviewStop').classList.toggle('hidden', !r.running);
+  $('selReviewSide').value = mySide() == null ? 'both' : String(mySide());
   renderGraph();
   // 今の手の評価
   const n = state.cursor;
@@ -758,7 +783,8 @@ function renderReview() {
     const mv = state.game.moves[n - 1].move;
     const prevTo = n > 1 ? state.game.moves[n - 2].move.to : null;
     const ja = moveToJa(mps[n - 1], mv, prevTo);
-    const mk = r.marks[n];
+    const mk0 = r.marks[n];
+    const mk = mk0 && isMine(mk0.side) ? mk0 : (mk0 ? { ...mk0, kind: '', note: '' } : mk0);
     const head = document.createElement('div');
     head.append(`${n}手目 ${ja}`);
     if (mk && mk.kind) {
@@ -797,6 +823,7 @@ function renderReview() {
   const line = (side, t) => `${side === 0 ? '☗先手' : '☖後手'}  悪手 ${t.bad}・疑問手 ${t.dubious}・最善手一致率 ${t.moves ? Math.round((t.match / t.moves) * 100) : 0}%`;
   $('reviewSum').innerHTML = '';
   for (const side of [0, 1]) {
+    if (!isMine(side)) continue;
     const d = document.createElement('div');
     d.textContent = line(side, s[side]);
     $('reviewSum').appendChild(d);
@@ -823,7 +850,7 @@ function renderGraph() {
   area += ` L${x(Math.max(0, lastI))},${H / 2} Z`;
   let marks = '';
   r.marks.forEach((m, i) => {
-    if (!m || !m.kind || !r.results[i]) return;
+    if (!m || !m.kind || !r.results[i] || !isMine(m.side)) return;
     marks += `<circle cx="${x(i)}" cy="${y(r.results[i].score)}" r="${m.kind === '悪手' ? 7 : 5}" fill="${m.kind === '悪手' ? '#e0675a' : '#e8c35a'}" />`;
   });
   const cx = onMainline() ? x(state.cursor) : x(state.branch.base);
@@ -841,9 +868,10 @@ function jumpMistake(dir) {
   const n = state.game.moves.length;
   for (let i = state.cursor + dir; i >= 1 && i <= n; i += dir) {
     const m = r.marks[i];
-    if (m && m.kind) { goTo(i); return; }
+    if (m && m.kind && isMine(m.side)) { goTo(i); return; }
   }
-  toast(dir > 0 ? 'この先に悪手・疑問手はありません' : 'この前に悪手・疑問手はありません');
+  const who = mySide() == null ? '' : (mySide() === 0 ? '先手の' : '後手の');
+  toast(dir > 0 ? `この先に${who}悪手・疑問手はありません` : `この前に${who}悪手・疑問手はありません`);
 }
 
 // ---- 操作 ----
@@ -934,6 +962,7 @@ function persist() {
       header: state.game.header,
       result: state.game.result,
       summary: state.game.summary,
+      meta: state.game.meta || {},
       branch: state.branch && { base: state.branch.base, moves: state.branch.moves.map((m) => moveToUsi(m.move)) },
       cursor: state.cursor,
       flipped: state.flipped,
@@ -955,6 +984,7 @@ function restore() {
       header: s.header || {},
       result: s.result || '',
       summary: s.summary || '',
+      meta: s.meta || { mySide: guessMySide(s.header) },
     };
     state.branch = s.branch ? { base: s.branch.base, moves: s.branch.moves.map((u) => ({ move: usiToMove(u), comment: '' })) } : null;
     state.flipped = !!s.flipped;
@@ -1080,6 +1110,11 @@ function bindUi() {
 
   // 局後解析
   $('btnReviewStop').onclick = stopReview;
+  $('selReviewSide').onchange = (e) => {
+    const v = e.target.value;
+    state.game.meta = { ...(state.game.meta || {}), mySide: v === 'both' ? null : Number(v) };
+    update();
+  };
   $('btnPrevBad').onclick = () => jumpMistake(-1);
   $('btnNextBad').onclick = () => jumpMistake(1);
   $('graph').addEventListener('click', (e) => {
