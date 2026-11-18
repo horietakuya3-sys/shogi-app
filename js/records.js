@@ -43,8 +43,8 @@ export const deleteProblem = (id) => tx('problems', 'readwrite', (st) => reqP(st
 
 // ---- 戦法の判定（序盤30手で飛車がどこへ行ったか、角交換があったか） ----
 export const STRATEGY_NAMES = {
-  ibisha: '居飛車', kakugawari: '角換わり', shiken: '四間飛車', sangen: '三間飛車',
-  naka: '中飛車', mukai: '向かい飛車', unknown: '不明',
+  ibisha: '居飛車（その他）', yagura: '矢倉', gangi: '雁木', kakugawari: '角換わり', aigakari: '相掛かり', yokofu: '横歩取り',
+  shiken: '四間飛車', sangen: '三間飛車', naka: '中飛車', mukai: '向かい飛車', unknown: '不明',
 };
 
 export function detectStrategy(startSfen, moves, side) {
@@ -53,32 +53,57 @@ export function detectStrategy(startSfen, moves, side) {
   const rookHome = side === SENTE ? 7 * 9 + 7 : 1 * 9 + 1; // ２八 / ８二
   const rook = side === SENTE ? 'R' : 'r';
   if (pos.board[rookHome] !== rook) return 'unknown';
+  // 先手から見た筋・段のマス番号（後手は盤を回して見る）
+  const view = (file, rank) => {
+    const f = side === SENTE ? file : 10 - file, r = side === SENTE ? rank : 10 - rank;
+    return (r - 1) * 9 + (9 - f);
+  };
+  const mine = (pc, t) => pc && colorOf(pc) === side && typeOf(pc) === t;
   let rookSq = rookHome;
-  let bishopTraded = false;
+  let bishopTraded = false, yokofu = false;
+  let myRookPawn5 = false, oppRookPawn5 = false;
+  let ranged = null;
+  let snap = null; // 30手目あたりの局面（囲いの判定用）
   const limit = Math.min(moves.length, 40);
   for (let i = 0; i < limit; i++) {
     const m = moves[i].move;
     const pc = m.drop ? null : pos.board[m.from];
     const cap = m.drop ? null : pos.board[m.to];
     if (cap && typeOf(cap).replace('+', '') === 'B' && i < 30) bishopTraded = true;
+    if (m.to === rookSq && pc && colorOf(pc) !== side) rookSq = -1; // 飛車を取られた
     if (!m.drop && m.from === rookSq && pc === rook) {
-      // 振り飛車の判定は、飛車が横に動いて自陣（2段目／8段目）にいるとき
       const row = Math.floor(m.to / 9);
       const homeRow = side === SENTE ? 7 : 1;
-      if (row === homeRow) {
+      // 振り飛車: 飛車が自陣の段で横に動いた筋
+      if (row === homeRow && !ranged) {
         const file = 9 - (m.to % 9);
-        const f = side === SENTE ? file : 10 - file; // 先手から見た筋
+        const f = side === SENTE ? file : 10 - file;
         const map = { 6: 'shiken', 7: 'sangen', 5: 'naka', 8: 'mukai' };
-        if (map[f]) return map[f];
+        if (map[f]) ranged = map[f];
       }
+      // 横歩取り: 飛車で３四（後手なら７六）の歩を取る
+      if (m.to === view(3, 4) && cap && typeOf(cap) === 'P') yokofu = true;
       rookSq = m.to;
     } else if (!m.drop && m.from === rookSq) {
-      rookSq = -1; // 飛車を取られたなど
+      rookSq = -1;
     }
-    if (cap && m.to === rookSq) rookSq = -1;
     pos.applyMove(m);
+    // 飛車先の歩が５段目まで伸びたか（相掛かりの判定用）
+    const myP = side === SENTE ? 'P' : 'p', opP = side === SENTE ? 'p' : 'P';
+    if (pos.board[view(2, 5)] === myP) myRookPawn5 = true;
+    if (pos.board[view(8, 5)] === opP) oppRookPawn5 = true;
+    if (i === Math.min(limit, 30) - 1) snap = pos.clone();
   }
-  return bishopTraded ? 'kakugawari' : 'ibisha';
+  if (ranged) return ranged;
+  if (yokofu) return 'yokofu';
+  if (bishopTraded) return 'kakugawari';
+  const b = (snap || pos).board;
+  // 矢倉: ７七銀と６七金（または７八金と８八玉）
+  if (mine(b[view(7, 7)], 'S') && (mine(b[view(6, 7)], 'G') || mine(b[view(8, 8)], 'K'))) return 'yagura';
+  // 雁木: ６七銀と５七銀（または４七銀）
+  if (mine(b[view(6, 7)], 'S') && (mine(b[view(5, 7)], 'S') || mine(b[view(4, 7)], 'S'))) return 'gangi';
+  if (myRookPawn5 && oppRookPawn5) return 'aigakari';
+  return 'ibisha';
 }
 
 // ---- 1局分の記録を作る ----

@@ -3,7 +3,7 @@
 // 2. オフラインでも開けるようにキャッシュする
 // 3. 他アプリからの棋譜共有（Web Share Target）を受け取る
 
-const VERSION = 'v5';
+const VERSION = 'v6';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';

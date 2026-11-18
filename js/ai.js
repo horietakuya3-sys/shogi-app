@@ -22,13 +22,18 @@ export const STRATEGIES = {
   auto: { name: 'おまかせ' },
   none: { name: 'エンジン任せ', plan: [] },
   ibisha: { name: '居飛車', plan: ['2g2f', '2f2e', '7g7f', '6i7h', '3i4h', '5i6h', '4i5h', '9g9f'] },
+  yagura: { name: '矢倉', plan: ['7g7f', '7i6h', '6g6f', '5g5f', '3i4h', '4i5h', '6i7h', '5i6i', '5h6g', '6h7g', '8h7i', '2g2f'] },
+  gangi: { name: '雁木', plan: ['7g7f', '6g6f', '7i6h', '5g5f', '3i4h', '6h6g', '4h5g', '6i7h', '4i5h', '5i6i', '2g2f'] },
+  kakugawari: { name: '角換わり', note: '相手が角道を開けたときに角を交換する', plan: ['7g7f', '2g2f', '6i7h', '2f2e', '8h2b+', '7i8h', '8h7g', '3i3h', '4g4f', '3h4g', '5i6h'] },
+  aigakari: { name: '相掛かり', note: '相手も飛車先の歩を伸ばしたときに成立する', plan: ['2g2f', '2f2e', '6i7h', '3i3h', '2e2d', '2h2d', '2d2f', '7g7f', '5i5h'] },
+  yokofu: { name: '横歩取り', note: '相手が3四歩と8筋の歩交換に応じたときに横歩を取る', plan: ['7g7f', '2g2f', '2f2e', '6i7h', '2e2d', '2h2d', '2d3d', '3d3f'] },
   bougin: { name: '棒銀', plan: ['2g2f', '2f2e', '7g7f', '6i7h', '3i3h', '3h2g', '2g2f', '2f1e'] },
   shiken: { name: '四間飛車', plan: ['7g7f', '6g6f', '2h6h', '5i4h', '4h3h', '3h2h', '3i3h', '6i5h', '1g1f', '4g4f'] },
   sangen: { name: '三間飛車', plan: ['7g7f', '6g6f', '2h7h', '5i4h', '4h3h', '3h2h', '3i3h', '6i5h', '1g1f', '4g4f'] },
   naka: { name: '中飛車', plan: ['5g5f', '2h5h', '5i4h', '4h3h', '3h2h', '3i3h', '7g7f', '4g4f', '5f5e'] },
   mukai: { name: '向かい飛車', plan: ['7g7f', '6g6f', '8h7g', '2h8h', '5i4h', '4h3h', '3h2h', '3i3h', '6i5h'] },
 };
-export const RANDOM_POOL = ['ibisha', 'bougin', 'shiken', 'sangen', 'naka', 'mukai', 'none'];
+export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'shiken', 'sangen', 'naka', 'mukai', 'none'];
 
 const PLAN_MAX_PLY = 40; // これより後は駒組みを続けない
 const PLAN_TOL = 150; // 駒組みの手を指すときに許す損

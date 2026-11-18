@@ -461,7 +461,7 @@ function setupPlaySheet() {
     const st = row.querySelector('.p-strategy');
     const ty = row.querySelector('.p-type');
     lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}</option>`).join('');
-    st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.name}</option>`).join('');
+    st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.name}${v.note ? '（相手次第）' : ''}</option>`).join('');
     ty.value = p.type;
     lv.value = String(p.level);
     st.value = p.strategy;
@@ -1434,10 +1434,12 @@ function bindUi() {
     const humans = p.players.map((x, i) => (x.type === 'human' ? i : -1)).filter((i) => i >= 0);
     if (!humans.length) return;
     const side = humans.length === 1 ? humans[0] : curPos().turn;
-    if (!confirmSheetless('投了しますか？')) return;
-    endPlay('投了', 1 - side);
+    confirmSheet('投了しますか？', '投了する').then((ok) => { if (ok && state.play === p) endPlay('投了', 1 - side); });
   };
-  $('btnAbort').onclick = () => { if (confirmSheetless('対局を中断しますか？')) endPlay('中断', null); };
+  $('btnAbort').onclick = () => {
+    const p = state.play;
+    confirmSheet('対局を中断しますか？', '中断する').then((ok) => { if (ok && state.play === p) endPlay('中断', null); });
+  };
   $('btnEndReview').onclick = () => { $('endSheet').classList.add('hidden'); state.cursor = 0; startReview(); };
   $('btnEndClose').onclick = () => $('endSheet').classList.add('hidden');
   $('endSheet').addEventListener('click', (e) => { if (e.target === $('endSheet')) $('endSheet').classList.add('hidden'); });
@@ -1479,15 +1481,22 @@ function bindUi() {
   });
 }
 
-// 確認（2回押しで確定する簡易版。ブラウザのダイアログは使わない）
-const confirmState = { msg: '', at: 0 };
-function confirmSheetless(msg) {
-  const now = Date.now();
-  if (confirmState.msg === msg && now - confirmState.at < 3000) { confirmState.msg = ''; return true; }
-  confirmState.msg = msg;
-  confirmState.at = now;
-  toast(`${msg} もう一度押すと確定します`, 3000);
-  return false;
+// 確認用の小さな画面（ブラウザのダイアログは使わない）
+function confirmSheet(msg, okLabel = 'はい') {
+  return new Promise((resolve) => {
+    const sh = $('confirmSheet');
+    $('confirmText').textContent = msg;
+    $('btnConfirmOk').textContent = okLabel;
+    sh.classList.remove('hidden');
+    const done = (v) => {
+      sh.classList.add('hidden');
+      $('btnConfirmOk').onclick = $('btnConfirmCancel').onclick = sh.onclick = null;
+      resolve(v);
+    };
+    $('btnConfirmOk').onclick = (e) => { e.stopPropagation(); done(true); };
+    $('btnConfirmCancel').onclick = (e) => { e.stopPropagation(); done(false); };
+    sh.onclick = (e) => { if (e.target === sh) done(false); };
+  });
 }
 
 async function main() {
