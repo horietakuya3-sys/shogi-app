@@ -1,0 +1,28 @@
+{
+  "name": "将棋研究",
+  "short_name": "将棋研究",
+  "description": "複数の候補手と評価値で棋譜を研究する将棋アプリ",
+  "lang": "ja",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2a2118",
+  "theme_color": "#3b2f22",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "./share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "files": [
+        { "name": "kif", "accept": [".kif", ".kifu", ".ki2", ".txt", "text/plain", "application/octet-stream", "*/*"] }
+      ]
+    }
+  }
+}
