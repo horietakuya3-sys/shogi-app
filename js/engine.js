@@ -96,7 +96,8 @@ export class Engine {
       const cur = this.current;
       this.current = null;
       this.state = 'idle';
-      if (cur && cur.onDone && !cur.cancelled) cur.onDone(line.split(/\s+/)[1], cur.lines);
+      if (cur && cur.cancelled) { if (cur.onCancel) cur.onCancel(); }
+      else if (cur && cur.onDone) cur.onDone(line.split(/\s+/)[1], cur.lines);
       if (this.pending) this._start();
       return;
     }
@@ -131,7 +132,7 @@ export class Engine {
     req.lines = [];
     req.fresh = [];
     req.prev = [];
-    if (this.pending) this.pending.cancelled = true;
+    this._cancelPending();
     this.pending = req;
     if (this.state === 'searching') {
       this.current.cancelled = true;
@@ -153,8 +154,26 @@ export class Engine {
     this._post(r.go || 'go infinite');
   }
 
+  _cancelPending() {
+    if (!this.pending) return;
+    this.pending.cancelled = true;
+    if (this.pending.onCancel) this.pending.onCancel();
+    this.pending = null;
+  }
+
+  // 1回だけ探索して { bestmove, lines } を返す。割り込まれたら null
+  searchOnce({ sfen, multipv = 1, go }) {
+    return new Promise((resolve) => {
+      this.search({
+        sfen, multipv, go,
+        onDone: (bestmove, lines) => resolve({ bestmove, lines }),
+        onCancel: () => resolve(null),
+      });
+    });
+  }
+
   stop() {
-    if (this.pending) { this.pending.cancelled = true; this.pending = null; }
+    this._cancelPending();
     if (this.state === 'searching') {
       this.current.cancelled = true;
       this.state = 'stopping';

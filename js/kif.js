@@ -80,6 +80,7 @@ function parseKif(text) {
   let result = '';
   let ended = false;
   let isKi2 = null;
+  let summary = '';
 
   const ensurePos = () => {
     if (!pos) {
@@ -144,11 +145,11 @@ function parseKif(text) {
       }
       continue;
     }
-    const em = line.match(/^まで(\d+)手で(.*)$/);
-    if (em) { if (!result) result = em[2]; ended = true; continue; }
+    const em = line.match(/^まで(\d+)手(.*)$/);
+    if (em) { summary = line.trim(); ended = true; continue; }
   }
   ensurePos();
-  return { startSfen, moves, header, result };
+  return { startSfen, moves, header, result, summary };
 }
 
 // 1手分の文字列を解釈（例: ７六歩(77) / 同　歩(23) / ５五角打 / ２二角成 / ４八金右）
@@ -248,7 +249,7 @@ function bodToSfen(bodLines, header) {
 }
 
 // KIF 書き出し
-export function toKif(startSfen, moves, header = {}) {
+export function toKif(startSfen, moves, header = {}, result = '', summary = '') {
   const out = ['# ---- shogi-app 棋譜ファイル ----'];
   const handicap = Object.keys(HANDICAP).find((k) => HANDICAP[k] === startSfen);
   for (const k of ['開始日時', '棋戦', '先手', '後手']) if (header[k]) out.push(`${k}：${header[k]}`);
@@ -264,5 +265,7 @@ export function toKif(startSfen, moves, header = {}) {
     pos.applyMove(m.move);
     prevTo = m.move.to;
   });
+  if (result) out.push(`${String(moves.length + 1).padStart(4)} ${result}`);
+  if (summary) out.push(summary);
   return out.join('\n') + '\n';
 }

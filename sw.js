@@ -3,14 +3,14 @@
 // 2. オフラインでも開けるようにキャッシュする
 // 3. 他アプリからの棋譜共有（Web Share Target）を受け取る
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
 
 const APP_FILES = [
   './', 'index.html', 'coi.js', 'css/style.css', 'manifest.webmanifest',
-  'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js',
+  'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js', 'js/ai.js', 'js/review.js',
   'icons/icon-192.png', 'icons/icon-512.png',
 ];
 const ENGINE_FILES = [
