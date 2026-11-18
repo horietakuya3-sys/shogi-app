@@ -128,6 +128,7 @@
     </div>
     <label class="row check"><span>駒音</span><input type="checkbox" id="chkSound" checked></label>
     <button data-act="newGame">新しい盤（平手）</button>
+    <button data-act="terms">利用規約・ライセンス</button>
     <button data-act="close" class="sub">閉じる</button>
   </div>
 </div>
@@ -171,6 +172,20 @@
     <label class="row check"><span>今の局面から始める</span><input type="checkbox" id="chkFromHere"></label>
     <button id="btnPlayStart" class="primary">対局開始</button>
     <button id="btnPlayCancel" class="sub">やめる</button>
+  </div>
+</div>
+
+<div class="sheet center hidden" id="termsSheet">
+  <div class="sheet-inner terms">
+    <div class="sheet-title">はじめに</div>
+    <p>将棋研究は、個人が作った無料の将棋研究アプリです。使う前に次の点を確認してください。</p>
+    <ul>
+      <li>個人情報は集めません。対局の記録はこの端末の中にだけ保存され、消えることもあります。</li>
+      <li>オンライン対局や大会の対局中に、このアプリで指し手を調べないでください。</li>
+      <li>評価値や悪手の判定が正しいことは保証できません。</li>
+    </ul>
+    <p><a href="terms.html">利用規約の全文とライセンスを読む</a></p>
+    <button id="btnTermsAgree" class="primary">同意して始める</button>
   </div>
 </div>
 

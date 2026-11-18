@@ -1397,6 +1397,7 @@ function bindUi() {
       try { await navigator.clipboard.writeText(kifText()); toast('KIFをコピーしました'); } catch { toast('コピーできませんでした'); }
     }
     if (act === 'flip') { state.flipped = !state.flipped; update(); }
+    if (act === 'terms') { location.href = 'terms.html'; return; }
     if (act === 'newGame') loadGame({ startSfen: STARTPOS, moves: [], header: {}, result: '' }, { silent: true });
   });
   $('selMultiPV').value = String(state.multipv);
@@ -1499,12 +1500,27 @@ function confirmSheet(msg, okLabel = 'はい') {
   });
 }
 
+// 初めて開いたときに、利用規約の確認を出す
+const TERMS_KEY = 'shogi-app:terms';
+const TERMS_VERSION = '1';
+function checkTerms() {
+  let agreed = false;
+  try { agreed = localStorage.getItem(TERMS_KEY) === TERMS_VERSION; } catch { /* 無視 */ }
+  if (agreed) return;
+  $('termsSheet').classList.remove('hidden');
+  $('btnTermsAgree').onclick = () => {
+    try { localStorage.setItem(TERMS_KEY, TERMS_VERSION); } catch { /* 無視 */ }
+    $('termsSheet').classList.add('hidden');
+  };
+}
+
 async function main() {
   unlockAudio();
   restore();
   buildBoard();
   bindUi();
   update();
+  checkTerms();
   await checkShared();
   try {
     await engine.init();

@@ -235,3 +235,7 @@ body.noscroll { overflow: hidden; }
 .sheet.center { align-items: center; }
 .sheet.center .sheet-inner { border-radius: 14px; width: calc(100% - 48px); max-width: 360px; padding: 16px; }
 .sheet-inner.confirm .promo-btns button { text-align: center; }
+.sheet-inner.terms { font-size: 14px; line-height: 1.7; }
+.sheet-inner.terms p, .sheet-inner.terms ul { margin: 4px 0; }
+.sheet-inner.terms ul { padding-left: 1.2em; }
+.sheet-inner.terms a { color: #ffc98f; }

@@ -28,6 +28,10 @@
 - エンジンは端末の中で動くため、解析に通信は使いません
 - エンジンに必要な SharedArrayBuffer を GitHub Pages で使うため、Service Worker（`sw.js`）で COOP/COEP ヘッダーを付け直しています。初回だけページが自動で1回読み込み直されます
 
+## 利用規約
+
+[利用規約・ライセンス](https://horietakuya3-sys.github.io/shogi-app/terms.html) を読んでから使ってください。アプリを初めて開いたときにも確認画面が出ます。
+
 ## ライセンス
 
 やねうら王がGPLv3のため、このアプリも GPLv3 で公開しています（`LICENSE`）。
