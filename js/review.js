@@ -33,12 +33,24 @@ export function scoreForGraph(s) {
 }
 
 // 戻り値: results[i] = { score, best, pv }（i = 0..手数、i手目を指した後の局面）
-export async function analyzeGame(engine, startSfen, moves, { movetime = 1000, onProgress, isCancelled, results = [] } = {}) {
+// getFocus(): 今見ている手数。そこから先を優先して解析し、飛ばした手前の局面は最後に埋める
+export async function analyzeGame(engine, startSfen, moves, { movetime = 1000, onProgress, isCancelled, results = [], getFocus } = {}) {
   const positions = [new Position(startSfen)];
   for (const m of moves) { const p = positions[positions.length - 1].clone(); p.applyMove(m.move); positions.push(p); }
-  for (let i = 0; i < positions.length; i++) {
+  const N = positions.length;
+  const nextIndex = () => {
+    const f = getFocus ? Math.max(0, Math.min(N - 1, getFocus() - 1)) : 0;
+    // その手を指す前の局面から順に、最後まで → 残りを最初から
+    for (let k = 0; k < N; k++) {
+      const i = (f + k) % N;
+      if (!results[i]) return i;
+    }
+    return -1;
+  };
+  for (;;) {
     if (isCancelled && isCancelled()) return null;
-    if (results[i]) { if (onProgress) onProgress(i, results); continue; }
+    const i = nextIndex();
+    if (i < 0) break;
     const pos = positions[i];
     if (!pos.legalMoves().length) {
       // 詰み（指せる手がない）: 手番側の負け

@@ -81,21 +81,24 @@ export class AiPlayer {
     return null;
   }
 
-  // pos.turn の側が使う考慮時間
-  goCommand(clock, side) {
+  // 最強レベルの考慮時間: 最大5秒。持ち時間の残りと局面の進み具合で短くする
+  goCommand(clock, side, ply = 1) {
     if (this.cfg.nodes) return `go nodes ${this.cfg.nodes}`;
-    // 最強: 1手5〜10秒を目安に、持ち時間に合わせて短くする
-    let t = 8000;
+    const MAX = 5000, MIN = 500;
+    let t = MAX;
     if (clock && clock.enabled) {
       const main = Math.max(0, clock.main[side]);
       const byo = clock.byoyomi;
-      let safe;
-      if (main > 0) safe = byo ? main + byo - 1500 : main / 25;
-      else safe = byo - 1500;
-      t = Math.min(t, Math.max(500, safe));
-      if (main > 0 && !byo) t = Math.min(t, main / 25);
+      if (main > 0) {
+        // 残り時間を、あと40手ほどで使い切る配分にする。秒読みがあればその一部も使う
+        t = main / 40 + (byo ? byo * 0.3 : 0);
+        if (byo) t = Math.min(t, main + byo - 1500);
+      } else {
+        t = byo - 1500; // 秒読みだけ
+      }
     }
-    return `go movetime ${Math.round(Math.max(500, t))}`;
+    if (ply <= 20) t *= 0.6; // 序盤は軽めに
+    return `go movetime ${Math.round(Math.max(MIN, Math.min(MAX, t)))}`;
   }
 
   // 戻り値: { move, resign, info } / 中断されたら null
@@ -103,7 +106,7 @@ export class AiPlayer {
     const sfen = pos.toSfen();
     const openingTol = pos.ply <= 16 ? 40 : 0; // 序盤は少し散らして毎回同じ将棋にしない
     const mpv = Math.max(this.cfg.mpv, openingTol ? 4 : 1);
-    const res = await this.engine.searchOnce({ sfen, multipv: mpv, go: this.goCommand(clock, pos.turn) });
+    const res = await this.engine.searchOnce({ sfen, multipv: mpv, go: this.goCommand(clock, pos.turn, pos.ply) });
     if (!res) return null;
     if (res.bestmove === 'resign') return { resign: true };
     if (res.bestmove === 'win') return { win: true };

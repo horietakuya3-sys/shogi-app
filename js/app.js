@@ -19,7 +19,7 @@ const state = {
   branch: null, // { base: 本譜の何手目から分岐したか, moves: [] }
   cursor: 0, // 表示中の手数
   flipped: false,
-  analyze: true,
+  analyze: false, // 起動時は解析しない（解析ボタンで始める）
   multipv: 3,
   reviewDepth: 'normal',
   selected: null, // { from } or { drop }
@@ -233,7 +233,7 @@ function renderHand(el, color) {
 function renderArrows() {
   const svg = $('arrows');
   const best = state.candidates[0];
-  if (state.mode === 'play' || !state.analyze || !best || !best.pv || !best.pv[0]) { svg.innerHTML = ''; return; }
+  if (aiThinkingTurn() || !state.analyze || !best || !best.pv || !best.pv[0]) { svg.innerHTML = ''; return; }
   const mv = usiToMove(best.pv[0]);
   const center = (idx) => {
     const d = idxToDisplay(idx);
@@ -387,11 +387,22 @@ function renderCandidates(lines, status) {
 
 // ---- 検討モードの解析 ----
 let throttle = 0;
+// 対局中にAIが考えている手番か（そのあいだエンジンには触らない）
+function aiThinkingTurn() {
+  const p = state.play;
+  return state.mode === 'play' && p && !p.over && p.players[curPos().turn].type === 'ai';
+}
+
 function requestAnalysis() {
   if (!state.engineReady) return;
-  if (state.mode === 'play') return;
+  if (aiThinkingTurn()) {
+    state.candidates = [];
+    renderArrows();
+    renderCandidates([], state.analyze ? 'AIが考えています…' : '解析はオフです（解析ボタンでオン）');
+    return;
+  }
   if (state.review.running) { renderCandidates([], '局後解析中です…'); return; }
-  if (!state.analyze) { engine.stop(); state.candidates = []; renderCandidates([], '解析はオフです'); return; }
+  if (!state.analyze) { engine.stop(); state.candidates = []; renderArrows(); renderCandidates([], '解析はオフです（解析ボタンでオン）'); return; }
   const pos = curPos();
   if (!pos.legalMoves().length) {
     engine.stop();
@@ -409,7 +420,7 @@ function requestAnalysis() {
     multipv: state.multipv,
     go: 'go infinite',
     onUpdate: (lines) => {
-      if (state.mode === 'play' || curPos().toSfen() !== sfen) return;
+      if (aiThinkingTurn() || curPos().toSfen() !== sfen) return;
       state.candidates = lines;
       const now = performance.now();
       if (now - throttle < 250) return;
@@ -485,7 +496,6 @@ function startPlay(cfg, fromHere) {
     clock: { enabled, main: [cfg.main * 1000, cfg.main * 1000], byoyomi: cfg.byo * 1000, turnStart: performance.now() },
     thinkId: 0,
     over: false,
-    prevAnalyze: state.analyze,
   };
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -512,7 +522,6 @@ function startPlay(cfg, fromHere) {
   $('playBar').classList.remove('hidden');
   $('btnUndo').disabled = humans === 0;
   renderPlayInfo();
-  renderCandidates([], '対局中です。解析は対局のあとにできます');
   update();
   startClockTimer();
   nextTurn();
@@ -641,7 +650,6 @@ function endPlay(word, winner) {
     ? `まで${n}手で${word === '中断' ? '中断' : word}`
     : `まで${n}手で${winner === SENTE ? '先手' : '後手'}の勝ち`;
   state.mode = 'study';
-  state.analyze = p.prevAnalyze;
   $('playBar').classList.add('hidden');
   $('btnEngine').classList.toggle('on', state.analyze);
   const humans = p.players.filter((x) => x.type === 'human');
@@ -713,7 +721,7 @@ async function startReview() {
   if (r.key !== key) { r.key = key; r.results = []; r.marks = []; }
   const token = ++r.token;
   r.running = true;
-  r.done = 0;
+  r.done = r.results.filter(Boolean).length;
   engine.stop();
   state.candidates = [];
   renderArrows();
@@ -725,13 +733,15 @@ async function startReview() {
     movetime: DEPTHS[state.reviewDepth].movetime,
     results: r.results,
     isCancelled: () => r.token !== token,
+    // 見ている手を優先する（本譜上の位置。変化を検討中なら分岐点）
+    getFocus: () => (state.branch ? state.branch.base : state.cursor),
     onProgress: (i, results) => {
       if (r.token !== token) return;
-      r.done = i + 1;
+      r.done = results.filter(Boolean).length;
       r.results = results;
       r.marks = judgeMoves(state.game.startSfen, state.game.moves, results);
       const now = performance.now();
-      if (now - last > 400 || i + 1 === total) {
+      if (now - last > 400 || r.done === total || i === state.cursor || i === state.cursor - 1) {
         last = now;
         renderReview();
         renderMoveList();
@@ -838,16 +848,24 @@ function renderGraph() {
   const x = (i) => (n ? (i / n) * W : 0);
   const y = (sc) => H / 2 - (scoreForGraph(sc) / 3000) * (H / 2 - 4);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  let pts = '';
-  let area = `M0,${H / 2}`;
+  // 解析済みの区間ごとに線を引く（途中を飛ばして解析することがあるため）
+  let lines = '', areas = '';
+  let seg = [];
+  const flush = () => {
+    if (seg.length > 1) {
+      lines += `<polyline points="${seg.map(([a, b]) => `${a},${b}`).join(' ')}" fill="none" stroke="#f3ead9" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+      areas += `<path d="M${seg[0][0]},${H / 2} ${seg.map(([a, b]) => `L${a},${b}`).join(' ')} L${seg[seg.length - 1][0]},${H / 2} Z" fill="rgba(243,234,217,0.12)"/>`;
+    } else if (seg.length === 1) {
+      lines += `<circle cx="${seg[0][0]}" cy="${seg[0][1]}" r="2" fill="#f3ead9"/>`;
+    }
+    seg = [];
+  };
   for (let i = 0; i <= n; i++) {
     const res = r.results[i];
-    if (!res) break;
-    pts += `${x(i)},${y(res.score)} `;
-    area += ` L${x(i)},${y(res.score)}`;
+    if (!res) { flush(); continue; }
+    seg.push([x(i), y(res.score)]);
   }
-  const lastI = Math.min(n, r.results.length - 1);
-  area += ` L${x(Math.max(0, lastI))},${H / 2} Z`;
+  flush();
   let marks = '';
   r.marks.forEach((m, i) => {
     if (!m || !m.kind || !r.results[i] || !isMine(m.side)) return;
@@ -856,8 +874,8 @@ function renderGraph() {
   const cx = onMainline() ? x(state.cursor) : x(state.branch.base);
   svg.innerHTML = `
     <line x1="0" y1="${H / 2}" x2="${W}" y2="${H / 2}" stroke="#5a4a36" stroke-width="1"/>
-    <path d="${area}" fill="rgba(243,234,217,0.12)"/>
-    <polyline points="${pts}" fill="none" stroke="#f3ead9" stroke-width="2" vector-effect="non-scaling-stroke"/>
+    ${areas}
+    ${lines}
     ${marks}
     <line x1="${cx}" y1="0" x2="${cx}" y2="${H}" stroke="#e07b39" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
 }
@@ -967,7 +985,6 @@ function persist() {
       cursor: state.cursor,
       flipped: state.flipped,
       multipv: state.multipv,
-      analyze: state.mode === 'play' ? state.play.prevAnalyze : state.analyze,
       reviewDepth: state.reviewDepth,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
@@ -989,7 +1006,6 @@ function restore() {
     state.branch = s.branch ? { base: s.branch.base, moves: s.branch.moves.map((u) => ({ move: usiToMove(u), comment: '' })) } : null;
     state.flipped = !!s.flipped;
     state.multipv = s.multipv || 3;
-    state.analyze = s.analyze !== false;
     state.reviewDepth = s.reviewDepth || 'normal';
     positions(); // 検証も兼ねる
     state.cursor = Math.min(s.cursor || 0, line().length);
@@ -1039,7 +1055,6 @@ function bindUi() {
   $('btnLast').onclick = () => goTo(line().length);
   $('btnMainline').onclick = backToMainline;
   $('btnEngine').onclick = () => {
-    if (state.mode === 'play') { toast('対局中は解析できません'); return; }
     state.analyze = !state.analyze;
     $('btnEngine').classList.toggle('on', state.analyze);
     persist();
