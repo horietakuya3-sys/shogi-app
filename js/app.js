@@ -580,7 +580,9 @@ function renderPlayInfo() {
   if (!state.play) return;
   const [a, b] = state.play.players;
   const desc = (p) => p.label + (p.ai && p.detail !== 'おまかせ' ? `・${p.detail}` : '');
-  $('playInfo').textContent = `☗${desc(a)} 対 ☖${desc(b)}`;
+  // 序盤は、AIの直前の手が定跡か駒組みか読みかを添える（序盤の確認用）
+  const src = state.play.lastSrc && curPos().ply <= 40 ? `（AIの前の手：${state.play.lastSrc}）` : '';
+  $('playInfo').textContent = `☗${desc(a)} 対 ☖${desc(b)}${src}`;
 }
 
 function elapsedNow() {
@@ -704,7 +706,9 @@ async function nextTurn() {
   if (res.resign) { endPlay('投了', 1 - side); return; }
   if (res.win) { endPlay('入玉勝ち', side); return; }
   if (!curPos().isLegal(res.move)) { endPlay('中断', null); return; }
+  p.lastSrc = res.book ? '定跡' : res.plan ? '駒組み' : '読み';
   playTurnMove(res.move);
+  renderPlayInfo();
 }
 
 function endPlay(word, winner, { record = true } = {}) {
@@ -763,7 +767,7 @@ function undoMove() {
   state.cursor = state.game.moves.length;
   p.clock.turnStart = performance.now();
   // 戻した分の駒組みをやり直せるように、AIの進み具合を最初から数え直す
-  for (const pl of p.players) if (pl.ai) { pl.ai.planIdx = 0; pl.ai.planFails = 0; }
+  for (const pl of p.players) if (pl.ai) { pl.ai.planIdx = 0; pl.ai.planFails = 0; pl.ai.stepFails = 0; }
   update();
   nextTurn();
 }

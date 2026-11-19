@@ -60,7 +60,12 @@ export const castleFits = (strategyKey, castleKey) => {
 const BOOK_TAGS = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'shiken', 'sangen', 'naka', 'mukai'];
 
 const PLAN_MAX_PLY = 40; // これより後は駒組みを続けない
-const PLAN_TOL = 150; // 駒組みの手を指すときに許す損
+const PLAN_TOL = 70; // 囲いの手を指すときに許す損（レベルによらず小さく）
+const PLAN_TOL_ATTACK = 150; // 飛車を振るなど戦法を決める手に許す損（エンジンは振り飛車を低く見るため）
+const OPEN_END = 24; // ここまでは序盤として、全レベルで深く読み、損の小さい手だけを指す
+const MID_END = 40; // ここにかけてレベル本来の読みの量と許す損に戻す
+const OPEN_NODES = 150000; // 序盤の読みの量
+const OPEN_TOL = 40; // 序盤に許す損
 
 function mirrorUsi(u) {
   const f = (c) => String(10 - Number(c));
@@ -104,8 +109,11 @@ export class AiPlayer {
       }
       return null;
     });
+    // 飛車まわりの手（戦法を決める手）は、囲いの手より少し大きな損まで許す
+    this.planAttack = this.plan.map((u) => (st.attack || []).includes(u));
     this.planIdx = 0;
-    this.planFails = 0;
+    this.planFails = 0; // 飛ばした手順の数
+    this.stepFails = 0; // 今の手順を見送った回数
   }
 
   get castleName() { return this.castleKey ? CASTLES[this.castleKey].name : ''; }
@@ -122,6 +130,12 @@ export class AiPlayer {
     const best = Math.max(...ms.map((m) => m.ev));
     const width = this.level >= 10 ? 30 : this.level >= 8 ? 60 : 100;
     let cands = ms.filter((m) => m.ev >= best - width);
+    // 振り飛車は、定跡の戦法の印が「その先で振り飛車になりうる」程度の意味しかなく居飛車のような手も混じるので、飛車を振るまでは定跡を使わない
+    if (STRATEGIES[this.strategyKey].ranged) {
+      const home = me === SENTE ? 7 * 9 + 7 : 1 * 9 + 1; // ２八 / ８二
+      const pc = pos.board[home];
+      if (pc && colorOf(pc) === me && typeOf(pc) === 'R') return null;
+    }
     if (this.strategyKey !== 'none') {
       if (!BOOK_TAGS.includes(this.strategyKey)) return null; // 棒銀など定跡で区別できない戦法は駒組み手順で指す
       cands = cands.filter((m) => m.tags[me].has(this.strategyKey));
@@ -140,7 +154,7 @@ export class AiPlayer {
 
   // 次に指したい駒組みの手（指せなければ null）
   nextPlanMove(pos) {
-    if (pos.ply > PLAN_MAX_PLY || this.planFails >= 4) return null;
+    if (pos.ply > PLAN_MAX_PLY || this.planFails >= 4) return null; // 手順を4つ飛ばしたら駒組みはやめる
     const me = pos.turn;
     const legal = pos.legalMoves();
     while (this.planIdx < this.plan.length) {
@@ -197,15 +211,29 @@ export class AiPlayer {
     return Math.max(300, t);
   }
 
+  // 序盤は全レベル共通でまともに指す。OPEN_END手目までは深く読んで損を小さく、MID_END手目にかけてレベル本来の強さに戻す
+  phase(ply) { return ply <= OPEN_END ? 0 : ply >= MID_END ? 1 : (ply - OPEN_END) / (MID_END - OPEN_END); }
+  tolAt(ply) {
+    const t = this.phase(ply);
+    const early = ply <= 16 ? OPEN_TOL : Math.min(this.cfg.tol, OPEN_TOL); // 16手目までは毎回同じ将棋にならないよう少し散らす
+    return Math.round(early + (this.cfg.tol - early) * t);
+  }
+  goAt(clock, side, ply) {
+    if (!this.cfg.nodes) return this.goCommand(clock, side, ply);
+    const t = this.phase(ply);
+    const n = Math.max(this.cfg.nodes, OPEN_NODES);
+    return `go nodes ${Math.round(n + (this.cfg.nodes - n) * t)}`;
+  }
+
   // 戻り値: { move, resign, info } / 中断されたら null
   async think(pos, clock) {
     // まず定跡
     const bm = this.bookMove(pos);
     if (bm) return { move: bm, book: true };
     const sfen = pos.toSfen();
-    const openingTol = pos.ply <= 16 ? 40 : 0; // 序盤は少し散らして毎回同じ将棋にしない
-    const mpv = Math.max(this.cfg.mpv, openingTol ? 4 : 1);
-    const res = await this.engine.searchOnce({ sfen, multipv: mpv, go: this.goCommand(clock, pos.turn, pos.ply) });
+    const tol = this.tolAt(pos.ply);
+    const mpv = Math.max(this.cfg.mpv, pos.ply <= MID_END ? 4 : 1);
+    const res = await this.engine.searchOnce({ sfen, multipv: mpv, go: this.goAt(clock, pos.turn, pos.ply) });
     if (!res) return null;
     if (res.bestmove === 'resign') return { resign: true };
     if (res.bestmove === 'win') return { win: true };
@@ -213,7 +241,7 @@ export class AiPlayer {
     if (!lines.length) return { move: usiToMove(res.bestmove) };
     const bestV = Math.max(...lines.map(value));
 
-    // 戦法の駒組み
+    // 戦法の駒組み（自然な手のときだけ。損が大きい手は指さない）
     const planMv = this.nextPlanMove(pos);
     if (planMv) {
       const u = moveToUsi(planMv);
@@ -223,21 +251,21 @@ export class AiPlayer {
       else {
         const p = pos.clone();
         p.applyMove(planMv);
-        const r2 = await this.engine.searchOnce({ sfen: p.toSfen(), multipv: 1, go: `go nodes ${Math.max(20000, this.cfg.nodes || 200000)}` });
+        const r2 = await this.engine.searchOnce({ sfen: p.toSfen(), multipv: 1, go: `go nodes ${Math.max(OPEN_NODES, this.cfg.nodes || 300000)}` });
         if (!r2) return null;
         const l2 = r2.lines[0];
         if (l2) pv = -value(l2);
       }
-      if (pv != null && bestV - pv <= Math.max(PLAN_TOL, this.cfg.tol)) {
+      if (pv != null && bestV - pv <= (this.planAttack[this.planIdx] ? PLAN_TOL_ATTACK : PLAN_TOL)) {
         this.planIdx++;
-        this.planFails = 0;
+        this.stepFails = 0;
         return { move: planMv, plan: true };
       }
-      this.planFails++;
+      // 3回続けて見送ったら、その手順は飛ばして次の手順へ
+      if (++this.stepFails >= 3) { this.planIdx++; this.stepFails = 0; this.planFails++; }
     }
 
     // レベルに応じて、損が許容範囲の手から選ぶ（良い手ほど選ばれやすい）
-    const tol = Math.max(this.cfg.tol, openingTol);
     const ok = lines.filter((l) => bestV - value(l) <= tol);
     // 自分が詰ませられる局面や、詰まされる手は許容しない
     const safe = ok.filter((l) => !(l.mate != null && l.mate < 0) || value(l) === bestV);
