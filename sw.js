@@ -1,9 +1,11 @@
 // Service Worker
 // 1. すべての応答に COOP/COEP を付けて crossOriginIsolated にする
-// 2. オフラインでも開けるようにキャッシュする
+// 2. アプリ本体を版ごとにキャッシュし、その版で動かす（新しい版は、利用者が「更新する」を押すまで待たせる）
 // 3. 他アプリからの棋譜共有（Web Share Target）を受け取る
+//
+// 公開するたびに VERSION を上げ、version.json の version と notes も同じ版に書き換える
 
-const VERSION = 'v10';
+const VERSION = 'v11';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
@@ -21,11 +23,17 @@ const ENGINE_FILES = [
 self.addEventListener('install', (ev) => {
   ev.waitUntil((async () => {
     const c = await caches.open(APP_CACHE);
-    await c.addAll(APP_FILES).catch(() => {});
+    // HTTPキャッシュの古いファイルが混ざらないよう、必ず取り直す
+    await c.addAll(APP_FILES.map((u) => new Request(u, { cache: 'reload' }))).catch(() => {});
     const e = await caches.open(ENGINE_CACHE);
     await e.addAll(ENGINE_FILES).catch(() => {});
-    await self.skipWaiting();
+    // 初めて入れるときはすぐ使う。すでに古い版が動いているときは、利用者の了承（SKIP_WAITING）を待つ
   })());
+});
+
+self.addEventListener('message', (ev) => {
+  if (ev.data === 'SKIP_WAITING') self.skipWaiting();
+  if (ev.data === 'GET_VERSION' && ev.source) ev.source.postMessage({ type: 'VERSION', version: VERSION });
 });
 
 self.addEventListener('activate', (ev) => {
@@ -82,15 +90,16 @@ self.addEventListener('fetch', (ev) => {
       if (res.ok) (await caches.open(bigCache)).put(req, res.clone());
       return withIsolation(res);
     }
-    // アプリ本体はネット優先（更新をすぐ反映）、つながらなければキャッシュ
-    try {
-      const res = await fetch(req, { cache: 'no-cache' });
-      if (res.ok) (await caches.open(APP_CACHE)).put(req, res.clone());
-      return withIsolation(res);
-    } catch (e) {
-      const hit = await caches.match(req, { ignoreSearch: true });
-      if (hit) return withIsolation(hit);
-      throw e;
+    // 更新情報は常にネットから
+    if (url.pathname.endsWith('/version.json')) {
+      return fetch(req, { cache: 'no-store' });
     }
+    // アプリ本体は、この版のキャッシュを優先（版が混ざらないように）。なければネット
+    const cache = await caches.open(APP_CACHE);
+    const hit = await cache.match(req, { ignoreSearch: true });
+    if (hit) return withIsolation(hit);
+    const res = await fetch(req, { cache: 'no-cache' });
+    if (res.ok) cache.put(req, res.clone());
+    return withIsolation(res);
   })());
 });

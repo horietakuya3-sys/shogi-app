@@ -131,6 +131,7 @@
     <label class="row check"><span>時計の音（持ち時間は1分ごと、秒読みは残り30秒と10秒から）</span><input type="checkbox" id="chkClockSound" checked></label>
     <button data-act="newGame">新しい盤（平手）</button>
     <button data-act="terms">利用規約・ライセンス</button>
+    <div class="pf-sub" id="appVersion" style="text-align:center"></div>
     <button data-act="close" class="sub">閉じる</button>
   </div>
 </div>
@@ -197,6 +198,18 @@
       <button id="btnTs11">11手詰め</button>
     </div>
     <button id="btnPmClose" class="sub">閉じる</button>
+  </div>
+</div>
+
+<div class="sheet center hidden" id="updateSheet">
+  <div class="sheet-inner terms">
+    <div class="sheet-title" id="updateTitle">新しい版があります。更新しますか？</div>
+    <ul id="updateNotes"></ul>
+    <div class="pf-sub">対局の記録や問題の進み具合は、更新しても消えません。</div>
+    <div class="promo-btns">
+      <button id="btnUpdateLater" class="sub">あとで</button>
+      <button id="btnUpdateNow" class="primary">更新する</button>
+    </div>
   </div>
 </div>
 

@@ -718,6 +718,7 @@ function endPlay(word, winner, { record = true } = {}) {
   // ランダムにしていたAIの戦法を明かす
   const reveal = p.players.map((x, i) => (x.ai ? `${i === 0 ? '☗' : '☖'}${x.label}の戦法: ${x.real}` : '')).filter(Boolean).join('\n');
   state.play = null;
+  setTimeout(askPendingUpdate, 1500);
   $('endText').textContent = (head === state.game.summary ? head : `${head}\n${state.game.summary}`)
     + (reveal ? `\n${reveal}` : '') + (record ? '' : '\n（戦績には記録していません）');
   $('endSheet').classList.remove('hidden');
@@ -1429,6 +1430,7 @@ async function revealPractice() {
 
 function endPractice() {
   if (state.mode !== 'practice') return;
+  setTimeout(askPendingUpdate, 500);
   state.practice = null;
   state.mode = 'study';
   engine.stop();
@@ -1744,6 +1746,61 @@ function confirmSheet(msg, okLabel = 'はい', recordDefault = null) {
   });
 }
 
+// ---- 更新の確認 ----
+// 新しい版が届いたら、すぐには切り替えず「更新しますか？」と聞く。対局中は終わってから聞く
+let pendingWorker = null;
+let updateAsked = false;
+async function setupUpdates() {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = await navigator.serviceWorker.ready;
+  const check = () => { if (reg.waiting && navigator.serviceWorker.controller) askUpdate(reg.waiting); };
+  reg.addEventListener('updatefound', () => {
+    const w = reg.installing;
+    if (w) w.addEventListener('statechange', () => { if (w.state === 'installed') check(); });
+  });
+  check();
+  const poll = () => reg.update().catch(() => { /* つながらないときは次の機会に */ });
+  poll();
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
+  setInterval(poll, 60 * 60 * 1000);
+  // 今の版を表示する
+  navigator.serviceWorker.addEventListener('message', (ev) => {
+    if (ev.data && ev.data.type === 'VERSION') $('appVersion').textContent = `版 ${ev.data.version}`;
+  });
+  if (navigator.serviceWorker.controller) navigator.serviceWorker.controller.postMessage('GET_VERSION');
+}
+
+async function askUpdate(worker) {
+  pendingWorker = worker;
+  if (updateAsked) return;
+  if (state.mode === 'play' || state.mode === 'practice') return; // 対局や問題の途中では聞かない
+  updateAsked = true;
+  let info = null;
+  try { info = await (await fetch('version.json', { cache: 'no-store' })).json(); } catch { /* 変更点なしで聞く */ }
+  const list = $('updateNotes');
+  list.innerHTML = '';
+  for (const n of (info && info.notes) || []) {
+    const li = document.createElement('li');
+    li.textContent = n;
+    list.appendChild(li);
+  }
+  $('updateTitle').textContent = `新しい版${info && info.version ? `（${info.version}）` : ''}があります。更新しますか？`;
+  $('updateSheet').classList.remove('hidden');
+  $('btnUpdateNow').onclick = () => {
+    $('btnUpdateNow').disabled = true;
+    navigator.serviceWorker.addEventListener('controllerchange', () => location.reload(), { once: true });
+    worker.postMessage('SKIP_WAITING');
+  };
+  $('btnUpdateLater').onclick = () => {
+    $('updateSheet').classList.add('hidden');
+    toast('次にアプリを開いたときに、もう一度お知らせします');
+  };
+}
+// 対局や問題が終わったあとに、保留していた更新を聞く
+function askPendingUpdate() {
+  if (pendingWorker && !updateAsked && pendingWorker.state === 'installed') askUpdate(pendingWorker);
+}
+
 // 初めて開いたときに、利用規約の確認を出す
 const TERMS_KEY = 'shogi-app:terms';
 const TERMS_VERSION = '1';
@@ -1766,6 +1823,7 @@ async function main() {
   bindUi();
   update();
   checkTerms();
+  setupUpdates().catch(() => { /* 更新の確認ができなくても動作は続ける */ });
   await checkShared();
   try {
     await engine.init();
