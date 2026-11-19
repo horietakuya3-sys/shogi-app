@@ -3,14 +3,14 @@
 // 2. オフラインでも開けるようにキャッシュする
 // 3. 他アプリからの棋譜共有（Web Share Target）を受け取る
 
-const VERSION = 'v9';
+const VERSION = 'v10';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
 const BOOK_CACHE = 'book-petabook233-v1';
 
 const APP_FILES = [
-  './', 'index.html', 'terms.html', 'coi.js', 'css/style.css', 'manifest.webmanifest',
+  './', 'index.html', 'terms.html', 'tsume/tsume.txt', 'coi.js', 'css/style.css', 'manifest.webmanifest',
   'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js', 'js/ai.js', 'js/review.js', 'js/records.js', 'js/sound.js', 'js/book.js',
   'icons/icon-192.png', 'icons/icon-512.png',
 ];

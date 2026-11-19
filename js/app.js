@@ -1102,7 +1102,40 @@ async function importData(text) {
 
 // ---- 復習（悪手を指した局面のやり直し） ----
 const MASTERED = 5;
-const PTYPE = { mistake: '悪手のやり直し', next: '次の一手', mate: '詰み筋' };
+const PTYPE = { mistake: '悪手のやり直し', next: '次の一手', mate: '詰み筋', tsume: '詰将棋' };
+const isMateType = (x) => ptype(x) === 'mate' || ptype(x) === 'tsume';
+
+// 詰将棋集（やねうら王「詰将棋500万問」から抜き出したもの）
+let tsumeCache = null;
+async function loadTsume() {
+  if (tsumeCache) return tsumeCache;
+  const res = await fetch('tsume/tsume.txt');
+  if (!res.ok) throw new Error('詰将棋集を読み込めませんでした');
+  const out = { 3: [], 5: [], 7: [], 9: [], 11: [] };
+  for (const line of (await res.text()).split('\n')) {
+    const [n, sfen] = line.split('\t');
+    if (sfen && out[n]) out[n].push(sfen);
+  }
+  tsumeCache = out;
+  return out;
+}
+
+async function startTsume(n) {
+  if (!state.engineReady) { toast('エンジンの準備ができてから始めてください'); return; }
+  let book;
+  try { book = await loadTsume(); } catch (e) { toast(e.message); return; }
+  let done = [];
+  try { done = (await getAllProblems()).filter((x) => x.type === 'tsume' && x.mateIn === n); } catch { /* 無視 */ }
+  const byId = new Map(done.map((x) => [x.id, x]));
+  // 間違えた問題を最大3問、残りはまだ解いていない問題からランダムに
+  const retry = done.filter((x) => x.box === 0 && x.tries > 0).sort(() => Math.random() - 0.5).slice(0, 3);
+  const fresh = book[n].filter((sf) => !byId.has('tsume:' + sf)).sort(() => Math.random() - 0.5).slice(0, 10 - retry.length);
+  const queue = [...retry, ...fresh.map((sf) => ({
+    id: 'tsume:' + sf, type: 'tsume', sfen: sf + ' 1', mateIn: n, prevTo: null, box: 0, tries: 0, correct: 0, lastAt: 0,
+  }))];
+  if (!queue.length) { toast('この手数の問題は全部解きました'); return; }
+  beginPractice(queue, 'tsume');
+}
 const ptype = (x) => x.type || 'mistake';
 
 // 前に記録した対局の解析結果から、詰み筋の問題を作り直す（この機能より前の記録のため）
@@ -1125,7 +1158,12 @@ async function openPracticeMenu() {
   await backfillProblems();
   let probs = [];
   try { probs = await getAllProblems(); } catch { /* 無視 */ }
+  probs = probs.filter((x) => ptype(x) !== 'tsume');
   const cnt = (t) => probs.filter((x) => (t === 'all' || ptype(x) === t) && x.box < MASTERED).length;
+  // 詰将棋集の進み具合
+  let solved = {};
+  try { for (const x of (await getAllProblems()).filter((y) => y.type === 'tsume' && y.correct > 0)) solved[x.mateIn] = (solved[x.mateIn] || 0) + 1; } catch { /* 無視 */ }
+  for (const n of [3, 5, 7, 9, 11]) $(`btnTs${n}`).textContent = `${n}手詰め（正解 ${solved[n] || 0}/1500）`;
   $('btnPmMistake').textContent = `自分の悪手のやり直し（${cnt('mistake')}問）`;
   $('btnPmNext').textContent = `次の一手（${cnt('next')}問）`;
   $('btnPmMate').textContent = `詰み筋（${cnt('mate')}問）`;
@@ -1138,17 +1176,22 @@ async function startPractice(type = 'all') {
   if (state.mode === 'play') return;
   let probs = [];
   try { probs = await getAllProblems(); } catch { /* 無視 */ }
+  probs = probs.filter((x) => ptype(x) !== 'tsume');
   if (type !== 'all') probs = probs.filter((x) => ptype(x) === type);
   let pool = probs.filter((x) => x.box < MASTERED);
   if (!pool.length) pool = probs;
   if (!pool.length) { toast('この種類の問題はまだありません。対局のあとに局後解析すると、棋譜から問題が作られます', 4000); return; }
   // 間違えた回数が多い（箱が小さい）ものほど先に。同じ箱の中はばらばらに
   pool.sort((a, b) => (a.box - b.box) || (Math.random() - 0.5));
+  beginPractice(pool.slice(0, 10), type);
+}
+
+function beginPractice(queue, type) {
   stopReview();
   engine.stop();
-  state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
+  if (state.mode !== 'practice') state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
   state.mode = 'practice';
-  state.practice = { queue: pool.slice(0, 10), idx: -1, phase: 'ask', item: null, judge: null, right: 0, type };
+  state.practice = { queue, idx: -1, phase: 'ask', item: null, judge: null, right: 0, type };
   $('practiceBar').classList.remove('hidden');
   nextPractice();
 }
@@ -1187,9 +1230,18 @@ function nextPractice() {
   const no = `${PTYPE[ptype(it)]} ${pr.idx + 1}/${pr.queue.length}`;
   const turnJa = pos.turn === SENTE ? '☗先手' : '☖後手';
   pr.mateLeft = it.mateIn || 0;
-  if (ptype(it) === 'mate') {
+  if (isMateType(it)) {
     pr.judge = null;
-    $('practiceInfo').textContent = `${no}　${turnJa}の番。${it.mateIn}手で詰ませてください`;
+    if (ptype(it) === 'tsume') {
+      // 正解手順を表示するために、裏で解いておく
+      if (!it.solution) {
+        pr.judge = engine.searchOnce({ sfen: it.sfen, multipv: 1, go: 'go movetime 1500' });
+        pr.judge.then((r) => { if (r && r.lines[0]) it.solution = r.lines[0].pv.slice(0, it.mateIn); });
+      }
+      $('practiceInfo').textContent = `${no}　${it.mateIn}手詰め（${turnJa}の番）。王手の連続で詰ませてください`;
+    } else {
+      $('practiceInfo').textContent = `${no}　${turnJa}の番。${it.mateIn}手で詰ませてください`;
+    }
   } else {
     // 判定用の解析を先に始めておく
     pr.judge = engine.searchOnce({ sfen: it.sfen, multipv: 5, go: 'go movetime 2000' });
@@ -1210,7 +1262,7 @@ function nextPractice() {
 async function answerPractice(mv) {
   const pr = state.practice;
   if (!pr || pr.phase !== 'ask') return;
-  if (ptype(pr.item) === 'mate') { answerMate(mv); return; }
+  if (isMateType(pr.item)) { answerMate(mv); return; }
   sound();
   pr.phase = 'judging';
   const it = pr.item;
@@ -1295,8 +1347,14 @@ async function answerMate(mv) {
   update();
   const ps = positions();
   const after = ps[ps.length - 1];
-  const no = `${PTYPE.mate} ${pr.idx + 1}/${pr.queue.length}`;
+  const no = `${PTYPE[ptype(it)]} ${pr.idx + 1}/${pr.queue.length}`;
   if (!after.legalMoves().length && after.inCheck()) { finishMate(true, '詰みました！'); return; }
+  if (ptype(it) === 'tsume' && !after.inCheck()) {
+    if (pr.judge) await pr.judge;
+    finishMate(false, '詰将棋では、攻める側は毎回王手をかけます');
+    return;
+  }
+  if (pr.judge) { await pr.judge; pr.judge = null; } // 裏の計算が終わるのを待ってからエンジンを使う
   renderCandidates([], '判定しています…');
   const res = await engine.searchOnce({ sfen: after.toSfen(), multipv: 1, go: 'go movetime 1000' });
   if (state.practice !== pr) return;
@@ -1333,7 +1391,7 @@ async function finishMate(ok, msg) {
     try { await putProblem(upd); pr.queue[pr.idx] = upd; } catch { /* 無視 */ }
   }
   const sol = pvToJa(new Position(it.sfen), it.solution || [], it.prevTo, 20).join(' ');
-  $('practiceInfo').textContent = `${PTYPE.mate} ${pr.idx + 1}/${pr.queue.length}　${ok ? '正解！ ' : ''}${msg}` + (ok ? '' : `。正解手順: ${sol}`);
+  $('practiceInfo').textContent = `${PTYPE[ptype(it)]} ${pr.idx + 1}/${pr.queue.length}　${ok ? '正解！ ' : ''}${msg}` + (ok || !sol ? '' : `。正解手順: ${sol}`);
   $('btnPracticeShow').classList.add('hidden');
   $('btnPracticeNext').classList.remove('hidden');
   $('btnPracticeRetry').classList.remove('hidden');
@@ -1343,7 +1401,12 @@ async function finishMate(ok, msg) {
 async function revealPractice() {
   const pr = state.practice;
   if (!pr || pr.phase !== 'ask') return;
-  if (ptype(pr.item) === 'mate') { pr.phase = 'judging'; finishMate(false, '答えを表示しました'); return; }
+  if (isMateType(pr.item)) {
+    pr.phase = 'judging';
+    if (pr.judge) await pr.judge; // 正解手順の計算を待つ
+    finishMate(false, '答えを表示しました');
+    return;
+  }
   pr.phase = 'judging';
   renderCandidates([], '解析しています…');
   const res = await pr.judge;
@@ -1626,6 +1689,7 @@ function bindUi() {
   $('btnPmMate').onclick = pm('mate');
   $('btnPmAll').onclick = pm('all');
   $('btnPmClose').onclick = () => $('practiceMenu').classList.add('hidden');
+  for (const n of [3, 5, 7, 9, 11]) $(`btnTs${n}`).onclick = () => { $('practiceMenu').classList.add('hidden'); startTsume(n); };
   $('btnExport').onclick = exportData;
   $('btnImport').onclick = () => $('importInput').click();
   $('importInput').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importData(await f.text()); };

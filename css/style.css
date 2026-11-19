@@ -240,3 +240,5 @@ body.noscroll { overflow: hidden; }
 .sheet-inner.terms p, .sheet-inner.terms ul { margin: 4px 0; }
 .sheet-inner.terms ul { padding-left: 1.2em; }
 .sheet-inner.terms a { color: #ffc98f; }
+.ts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ts-grid button { text-align: center !important; font-size: 14px !important; }
