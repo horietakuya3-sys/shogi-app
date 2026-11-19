@@ -8,6 +8,7 @@ import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
+import { moveReading, speak, speechSupported } from './speech.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
   buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES,
@@ -32,6 +33,7 @@ const state = {
   reviewDepth: 'normal',
   sound: true,
   clockSound: true,
+  speech: false,
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -87,11 +89,17 @@ function guessMySide(h = {}) {
 
 function sound() { if (state.sound) { try { playPieceSound(); } catch { /* 無視 */ } } }
 function beep(high) { try { playBeep(high); } catch { /* 無視 */ } }
+// 指し手の読み上げ（pos は指す前の局面）
+function announce(pos, mv, prevTo) {
+  if (!state.speech) return;
+  try { speak(moveReading(pos, mv, prevTo)); } catch { /* 無視 */ }
+}
 
 function playMove(mv) {
   if (state.mode === 'play') { playTurnMove(mv); return; }
   if (state.mode === 'practice') { answerPractice(mv); return; }
   sound();
+  announce(curPos(), mv, prevMove() ? prevMove().to : null);
   const ln = line();
   const next = ln[state.cursor];
   if (next && sameMove(next.move, mv)) { // 次の手と同じなら進むだけ
@@ -646,6 +654,7 @@ function playTurnMove(mv) {
   if (c.enabled) c.main[side] = Math.max(0, c.main[side] - elapsedNow());
   c.turnStart = performance.now();
   sound();
+  announce(curPos(), mv, prevMove() ? prevMove().to : null);
   state.game.moves.push({ move: mv, comment: '' });
   state.cursor = state.game.moves.length;
   state.selected = null;
@@ -725,6 +734,7 @@ function endPlay(word, winner, { record = true } = {}) {
   state.play = null;
   setTimeout(askPendingUpdate, 1500);
   $('endRating').textContent = '';
+  if (state.speech) setTimeout(() => speak(`${word === '詰み' ? 'つみ' : word}。${state.game.summary}`), 900);
   $('endText').textContent = (head === state.game.summary ? head : `${head}\n${state.game.summary}`)
     + (reveal ? `\n${reveal}` : '') + (record ? '' : '\n（戦績には記録していません）');
   $('endSheet').classList.remove('hidden');
@@ -1341,6 +1351,7 @@ async function answerPractice(mv) {
   if (!pr || pr.phase !== 'ask') return;
   if (isMateType(pr.item)) { answerMate(mv); return; }
   sound();
+  announce(curPos(), mv, pr.item.prevTo);
   pr.phase = 'judging';
   const it = pr.item;
   const pos = new Position(it.sfen);
@@ -1417,6 +1428,7 @@ async function answerMate(mv) {
   const pr = state.practice;
   const it = pr.item;
   sound();
+  announce(curPos(), mv, prevMove() ? prevMove().to : it.prevTo);
   pr.phase = 'judging';
   state.game.moves.push({ move: mv, comment: '' });
   state.cursor = state.game.moves.length;
@@ -1449,6 +1461,7 @@ async function answerMate(mv) {
   const reply = usiToMove(res.bestmove);
   if (!after.isLegal(reply)) { finishMate(false, '判定できませんでした'); return; }
   sound();
+  announce(after, reply, mv.to);
   state.game.moves.push({ move: reply, comment: '' });
   state.cursor = state.game.moves.length;
   pr.phase = 'ask';
@@ -1616,6 +1629,7 @@ function persist() {
       reviewDepth: state.reviewDepth,
       sound: state.sound,
       clockSound: state.clockSound,
+      speech: state.speech,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
 }
@@ -1630,6 +1644,7 @@ function restore() {
       state.reviewDepth = s.reviewDepth || 'normal';
       state.sound = s.sound !== false;
       state.clockSound = s.clockSound !== false;
+      state.speech = !!s.speech;
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
@@ -1710,6 +1725,9 @@ function bindUi() {
   });
   $('selMultiPV').value = String(state.multipv);
   $('selMultiPV').onchange = (e) => { state.multipv = Number(e.target.value); persist(); requestAnalysis(); };
+  $('chkSpeech').checked = state.speech;
+  $('chkSpeech').disabled = !speechSupported();
+  $('chkSpeech').onchange = (e) => { state.speech = e.target.checked; persist(); if (state.speech) speak('読み上げをオンにしました'); };
   $('chkClockSound').checked = state.clockSound;
   $('chkClockSound').onchange = (e) => { state.clockSound = e.target.checked; persist(); if (state.clockSound) beep(false); };
   $('chkSound').checked = state.sound;
@@ -1891,8 +1909,23 @@ function checkTerms() {
   };
 }
 
+// Googleサイトなどに埋め込まれていたら、単独で開くための案内を出す
+function checkEmbedded() {
+  let embedded = false;
+  try { embedded = self !== self.top; } catch { embedded = true; }
+  if (!embedded) return;
+  const bar = document.createElement('a');
+  bar.className = 'embed-bar';
+  bar.href = location.href.split('?')[0];
+  bar.target = '_blank';
+  bar.rel = 'noopener';
+  bar.textContent = '埋め込み表示ではAIが動きません。ここを押して新しいタブで開いてください';
+  document.body.prepend(bar);
+}
+
 async function main() {
   if (new URLSearchParams(location.search).has('debug')) self.__shogiState = state; // 動作確認用
+  checkEmbedded();
   unlockAudio();
   restore();
   buildBoard();
@@ -1907,9 +1940,14 @@ async function main() {
     requestAnalysis();
     loadBook().catch(() => { /* 対局を始めるときにもう一度読む */ });
   } catch (e) {
-    const msg = e.message === 'crossOriginIsolated'
+    let msg = e.message === 'crossOriginIsolated'
       ? 'エンジンの準備中です。表示が変わらなければページを再読み込みしてください'
       : 'エンジンを起動できませんでした: ' + e.message;
+    // 埋め込み表示（Googleサイトなど）や、対応していないブラウザ
+    let reloaded = false;
+    try { reloaded = !!sessionStorage.getItem('coiReloaded'); } catch { /* 無視 */ }
+    if (self !== self.top) msg = '埋め込み表示ではAIが動きません。上のオレンジの帯を押して、新しいタブで開いてください';
+    else if (e.message === 'crossOriginIsolated' && reloaded) msg = 'このブラウザではAIが動きません。Chrome、Edge、Firefox、Safari（16.4以降）などの新しいブラウザで開いてください。盤と棋譜の読み込みは使えます';
     renderCandidates([], msg);
     console.error(e);
   }
