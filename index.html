@@ -102,7 +102,7 @@
   <div class="sheet-inner">
     <button data-act="play" class="primary">対局を始める</button>
     <button data-act="review">局後解析（この棋譜を解析）</button>
-    <button data-act="practice">復習（悪手を指した局面のやり直し）</button>
+    <button data-act="practice">問題を解く（悪手のやり直し・次の一手・詰み筋）</button>
     <button data-act="profile">プロフィール・戦績</button>
     <button data-act="openFile">棋譜ファイルを読み込む</button>
     <button data-act="paste">棋譜を貼り付けて読み込む</button>
@@ -176,6 +176,18 @@
     <label class="row check"><span>今の局面から始める</span><input type="checkbox" id="chkFromHere"></label>
     <button id="btnPlayStart" class="primary">対局開始</button>
     <button id="btnPlayCancel" class="sub">やめる</button>
+  </div>
+</div>
+
+<div class="sheet hidden" id="practiceMenu">
+  <div class="sheet-inner">
+    <div class="sheet-title">問題を解く</div>
+    <div class="pf-sub">局後解析した対局から作った問題です。次の一手と詰み筋は、AIの手番の局面からも作っています。</div>
+    <button id="btnPmMistake">自分の悪手のやり直し</button>
+    <button id="btnPmNext">次の一手</button>
+    <button id="btnPmMate">詰み筋</button>
+    <button id="btnPmAll" class="primary">全部まぜて</button>
+    <button id="btnPmClose" class="sub">閉じる</button>
   </div>
 </div>
 

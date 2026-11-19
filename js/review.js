@@ -56,13 +56,19 @@ export async function analyzeGame(engine, startSfen, moves, { movetime = 1000, o
       // 詰み（指せる手がない）: 手番側の負け
       results[i] = { score: { mate: pos.turn === SENTE ? -1 : 1, terminal: true }, best: null, pv: [] };
     } else {
-      const r = await engine.searchOnce({ sfen: pos.toSfen(), multipv: 1, go: `go movetime ${movetime}` });
+      // 2番目に良い手も調べる（次の一手の問題を作るため）
+      const r = await engine.searchOnce({ sfen: pos.toSfen(), multipv: 2, go: `go movetime ${movetime}` });
       if (!r) return null;
-      const l = r.lines[0];
+      const val = (x) => (x.mate != null ? (x.mate > 0 ? 30000 - x.mate : -30000 - x.mate) : x.cp || 0);
+      const ls = r.lines.filter((x) => x && x.pv && x.pv[0]).sort((a, b) => (b.depth - a.depth) || (val(b) - val(a)));
+      const l = ls[0];
+      const l2 = ls.find((x) => x !== l && x.pv[0] !== (l && l.pv[0]));
       results[i] = {
         score: l ? toSente(l, pos.turn) : { cp: 0 },
         best: r.bestmove && !['resign', 'win'].includes(r.bestmove) ? r.bestmove : null,
-        pv: l ? l.pv.slice(0, 10) : [],
+        pv: l ? l.pv.slice(0, 12) : [],
+        score2: l2 ? toSente(l2, pos.turn) : null,
+        second: l2 ? l2.pv[0] : null,
       };
     }
     if (onProgress) onProgress(i, results);

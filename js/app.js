@@ -969,13 +969,15 @@ async function saveRecord(source, aiLevel) {
       if (!rec.stats && old.stats) rec.stats = old.stats;
       if (!hasReview && old.results) rec.results = old.results;
     }
-    if (!old && !source && rec.mySide == null) return; // 取り込んだ棋譜で自分の側が不明なものは記録しない
-    if (hasReview) rec.results = r.results.map((x) => ({ score: x.score, best: x.best, pv: (x.pv || []).slice(0, 6) }));
-    await putGame(rec);
-    if (hasReview && rec.mySide != null) {
+    // 問題づくり（次の一手と詰み筋は、どちらの側の手番からも作る）
+    if (hasReview) {
       const have = new Set((await getAllProblems()).map((x) => x.id));
       for (const pb of buildProblems(state.game, r, rec.mySide)) if (!have.has(pb.id)) await putProblem(pb);
     }
+    if (!old && !source && rec.mySide == null) return; // 取り込んだ棋譜で自分の側が不明なものは戦績に記録しない
+    if (hasReview) rec.results = r.results.map((x) => ({ score: x.score, best: x.best, pv: (x.pv || []).slice(0, 12) }));
+    rec.problemsV = 2;
+    await putGame(rec);
   } catch (e) { console.error('記録の保存に失敗', e); }
 }
 
@@ -990,7 +992,7 @@ async function openProfile() {
   try { [games, probs] = await Promise.all([getAllGames(), getAllProblems()]); } catch { body.textContent = '記録を読み込めませんでした'; return; }
   const a = aggregate(games);
   const todo = probs.filter((x) => x.box < 5).length;
-  $('btnProfilePractice').textContent = `復習を始める（残り${todo}問）`;
+  $('btnProfilePractice').textContent = `問題を解く（残り${todo}問）`;
   const el = (tag, cls, text) => { const d = document.createElement(tag); if (cls) d.className = cls; if (text != null) d.textContent = text; return d; };
   body.innerHTML = '';
   if (!a.total.games) {
@@ -1100,21 +1102,53 @@ async function importData(text) {
 
 // ---- 復習（悪手を指した局面のやり直し） ----
 const MASTERED = 5;
-async function startPractice() {
+const PTYPE = { mistake: '悪手のやり直し', next: '次の一手', mate: '詰み筋' };
+const ptype = (x) => x.type || 'mistake';
+
+// 前に記録した対局の解析結果から、詰み筋の問題を作り直す（この機能より前の記録のため）
+async function backfillProblems() {
+  try {
+    const games = await getAllGames();
+    const have = new Set((await getAllProblems()).map((x) => x.id));
+    for (const g of games) {
+      if (g.problemsV >= 2 || !g.results || g.results.length !== g.moves.length + 1) continue;
+      const game = { startSfen: g.startSfen, moves: g.moves.map((u) => ({ move: usiToMove(u) })), header: g.header || {} };
+      for (const pb of buildProblems(game, { results: g.results }, null)) if (pb.type === 'mate' && !have.has(pb.id)) await putProblem(pb);
+      g.problemsV = 2;
+      await putGame(g);
+    }
+  } catch (e) { console.error(e); }
+}
+
+// 問題の種類を選ぶ画面
+async function openPracticeMenu() {
+  await backfillProblems();
+  let probs = [];
+  try { probs = await getAllProblems(); } catch { /* 無視 */ }
+  const cnt = (t) => probs.filter((x) => (t === 'all' || ptype(x) === t) && x.box < MASTERED).length;
+  $('btnPmMistake').textContent = `自分の悪手のやり直し（${cnt('mistake')}問）`;
+  $('btnPmNext').textContent = `次の一手（${cnt('next')}問）`;
+  $('btnPmMate').textContent = `詰み筋（${cnt('mate')}問）`;
+  $('btnPmAll').textContent = `全部まぜて（${cnt('all')}問）`;
+  $('practiceMenu').classList.remove('hidden');
+}
+
+async function startPractice(type = 'all') {
   if (!state.engineReady) { toast('エンジンの準備ができてから始めてください'); return; }
   if (state.mode === 'play') return;
   let probs = [];
   try { probs = await getAllProblems(); } catch { /* 無視 */ }
+  if (type !== 'all') probs = probs.filter((x) => ptype(x) === type);
   let pool = probs.filter((x) => x.box < MASTERED);
   if (!pool.length) pool = probs;
-  if (!pool.length) { toast('復習する局面がまだありません。対局後に局後解析すると、自分の悪手・疑問手が問題になります'); return; }
+  if (!pool.length) { toast('この種類の問題はまだありません。対局のあとに局後解析すると、棋譜から問題が作られます', 4000); return; }
   // 間違えた回数が多い（箱が小さい）ものほど先に。同じ箱の中はばらばらに
   pool.sort((a, b) => (a.box - b.box) || (Math.random() - 0.5));
   stopReview();
   engine.stop();
   state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
   state.mode = 'practice';
-  state.practice = { queue: pool.slice(0, 10), idx: -1, phase: 'ask', item: null, judge: null, right: 0 };
+  state.practice = { queue: pool.slice(0, 10), idx: -1, phase: 'ask', item: null, judge: null, right: 0, type };
   $('practiceBar').classList.remove('hidden');
   nextPractice();
 }
@@ -1136,7 +1170,7 @@ function nextPractice() {
   pr.retrying = retry;
   pr.idx++;
   if (pr.idx >= pr.queue.length) {
-    toast(`復習おわり（${pr.queue.length}問中 ${pr.right}問正解）`, 3500);
+    toast(`おわり（${pr.queue.length}問中 ${pr.right}問正解）`, 3500);
     endPractice();
     return;
   }
@@ -1150,10 +1184,22 @@ function nextPractice() {
   state.selected = null;
   const pos = new Position(it.sfen);
   state.flipped = pos.turn === GOTE;
-  // 判定用の解析を先に始めておく
-  pr.judge = engine.searchOnce({ sfen: it.sfen, multipv: 5, go: 'go movetime 2000' });
-  const playedJa = moveToJa(pos, usiToMove(it.played), it.prevTo);
-  $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　実戦では ${playedJa}（${it.note || it.kind}）。もっと良い手を指してください`;
+  const no = `${PTYPE[ptype(it)]} ${pr.idx + 1}/${pr.queue.length}`;
+  const turnJa = pos.turn === SENTE ? '☗先手' : '☖後手';
+  pr.mateLeft = it.mateIn || 0;
+  if (ptype(it) === 'mate') {
+    pr.judge = null;
+    $('practiceInfo').textContent = `${no}　${turnJa}の番。${it.mateIn}手で詰ませてください`;
+  } else {
+    // 判定用の解析を先に始めておく
+    pr.judge = engine.searchOnce({ sfen: it.sfen, multipv: 5, go: 'go movetime 2000' });
+    if (ptype(it) === 'next') {
+      $('practiceInfo').textContent = `${no}　${turnJa}の番。この局面の一手を探してください（2番目の手より大きく良い手があります）`;
+    } else {
+      const playedJa = moveToJa(pos, usiToMove(it.played), it.prevTo);
+      $('practiceInfo').textContent = `${no}　実戦では ${playedJa}（${it.note || it.kind}）。もっと良い手を指してください`;
+    }
+  }
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeNext').classList.add('hidden');
   $('btnPracticeRetry').classList.add('hidden');
@@ -1164,6 +1210,7 @@ function nextPractice() {
 async function answerPractice(mv) {
   const pr = state.practice;
   if (!pr || pr.phase !== 'ask') return;
+  if (ptype(pr.item) === 'mate') { answerMate(mv); return; }
   sound();
   pr.phase = 'judging';
   const it = pr.item;
@@ -1236,9 +1283,67 @@ function revealCandidates(pos, lines) {
   if (lines[0]) setEval(senteScore(lines[0], pos.turn), lines[0].depth);
 }
 
+// 詰み筋: 攻める側の手を1手ずつ判定し、受ける側はエンジンが最善で応じる
+async function answerMate(mv) {
+  const pr = state.practice;
+  const it = pr.item;
+  sound();
+  pr.phase = 'judging';
+  state.game.moves.push({ move: mv, comment: '' });
+  state.cursor = state.game.moves.length;
+  state.selected = null;
+  update();
+  const ps = positions();
+  const after = ps[ps.length - 1];
+  const no = `${PTYPE.mate} ${pr.idx + 1}/${pr.queue.length}`;
+  if (!after.legalMoves().length && after.inCheck()) { finishMate(true, '詰みました！'); return; }
+  renderCandidates([], '判定しています…');
+  const res = await engine.searchOnce({ sfen: after.toSfen(), multipv: 1, go: 'go movetime 1000' });
+  if (state.practice !== pr) return;
+  const l = res && res.lines[0];
+  const used = state.game.moves.length; // ここまでの手数（攻め方の手を含む）
+  // 受ける側から見て負けの詰みがあり、残りの手数に収まっていれば正しい手
+  const ok = l && l.mate != null && l.mate < 0 && used + Math.abs(l.mate) <= it.mateIn;
+  if (!ok) {
+    finishMate(false, l && l.mate != null && l.mate < 0 ? 'まだ詰みますが、手数が長くなりました' : '詰みがなくなりました');
+    return;
+  }
+  // 受け方の応手
+  await new Promise((r) => setTimeout(r, 400));
+  if (state.practice !== pr) return;
+  const reply = usiToMove(res.bestmove);
+  if (!after.isLegal(reply)) { finishMate(false, '判定できませんでした'); return; }
+  sound();
+  state.game.moves.push({ move: reply, comment: '' });
+  state.cursor = state.game.moves.length;
+  pr.phase = 'ask';
+  update();
+  const left = it.mateIn - state.game.moves.length;
+  $('practiceInfo').textContent = `${no}　正しい手です。続けて詰ませてください（残り${left}手）`;
+  renderCandidates([], '続けて指してください');
+}
+
+async function finishMate(ok, msg) {
+  const pr = state.practice;
+  const it = pr.item;
+  pr.phase = 'done';
+  if (ok && !pr.retrying) pr.right++;
+  if (!pr.retrying) {
+    const upd = { ...it, tries: it.tries + 1, correct: it.correct + (ok ? 1 : 0), box: ok ? Math.min(MASTERED, it.box + 1) : 0, lastAt: Date.now() };
+    try { await putProblem(upd); pr.queue[pr.idx] = upd; } catch { /* 無視 */ }
+  }
+  const sol = pvToJa(new Position(it.sfen), it.solution || [], it.prevTo, 20).join(' ');
+  $('practiceInfo').textContent = `${PTYPE.mate} ${pr.idx + 1}/${pr.queue.length}　${ok ? '正解！ ' : ''}${msg}` + (ok ? '' : `。正解手順: ${sol}`);
+  $('btnPracticeShow').classList.add('hidden');
+  $('btnPracticeNext').classList.remove('hidden');
+  $('btnPracticeRetry').classList.remove('hidden');
+  renderCandidates([], ok ? `正解手順の一例: ${sol}` : '「もう一度」で同じ問題をやり直せます');
+}
+
 async function revealPractice() {
   const pr = state.practice;
   if (!pr || pr.phase !== 'ask') return;
+  if (ptype(pr.item) === 'mate') { pr.phase = 'judging'; finishMate(false, '答えを表示しました'); return; }
   pr.phase = 'judging';
   renderCandidates([], '解析しています…');
   const res = await pr.judge;
@@ -1451,7 +1556,7 @@ function bindUi() {
     if (act === 'play') { setupPlaySheet(); $('playSheet').classList.remove('hidden'); }
     if (act === 'review') startReview();
     if (act === 'profile') openProfile();
-    if (act === 'practice') startPractice();
+    if (act === 'practice') openPracticeMenu();
     if (act === 'openFile') $('fileInput').click();
     if (act === 'paste') { $('pasteSheet').classList.remove('hidden'); $('pasteText').focus(); }
     if (act === 'saveKif') saveKif();
@@ -1514,7 +1619,13 @@ function bindUi() {
 
   // プロフィール・復習
   $('btnProfileClose').onclick = () => $('profileSheet').classList.add('hidden');
-  $('btnProfilePractice').onclick = () => { $('profileSheet').classList.add('hidden'); startPractice(); };
+  $('btnProfilePractice').onclick = () => { $('profileSheet').classList.add('hidden'); openPracticeMenu(); };
+  const pm = (t) => () => { $('practiceMenu').classList.add('hidden'); startPractice(t); };
+  $('btnPmMistake').onclick = pm('mistake');
+  $('btnPmNext').onclick = pm('next');
+  $('btnPmMate').onclick = pm('mate');
+  $('btnPmAll').onclick = pm('all');
+  $('btnPmClose').onclick = () => $('practiceMenu').classList.add('hidden');
   $('btnExport').onclick = exportData;
   $('btnImport').onclick = () => $('importInput').click();
   $('importInput').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importData(await f.text()); };
@@ -1584,6 +1695,7 @@ function checkTerms() {
 }
 
 async function main() {
+  if (new URLSearchParams(location.search).has('debug')) self.__shogiState = state; // 動作確認用
   unlockAudio();
   restore();
   buildBoard();

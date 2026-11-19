@@ -158,33 +158,73 @@ function resultWinner(game) {
 }
 function startTurn(game) { return new Position(game.startSfen).turn; }
 
-// 自分の悪手・疑問手を復習問題にする
+// 局後解析の結果から問題を作る
+//  mistake: 自分の悪手・疑問手（その局面でもっと良い手を探す）
+//  next:    次の一手。最善手が2番目の手よりはっきり良い局面（どちらの側の手番でも。AIの手番も題材にする）
+//  mate:    詰み筋。手番側に詰みがある局面（N手で詰ませる）
+const NEXT_WR_GAP = 0.2, NEXT_CP_GAP = 400;
+const wrOf = (s) => (s.mate != null ? (s.mate > 0 ? 1 : 0) : 1 / (1 + Math.exp(-s.cp / 600)));
+// 先手から見た評価を、手番側から見た値に
+const forSide = (s, side) => (side === 0 ? s : (s.mate != null ? { mate: -s.mate } : { cp: -s.cp }));
+
 export function buildProblems(game, review, mySide) {
-  if (!review || !review.marks || mySide == null) return [];
+  if (!review || !review.results) return [];
   const out = [];
   const pos = [new Position(game.startSfen)];
   for (const m of game.moves) { const p = pos[pos.length - 1].clone(); p.applyMove(m.move); pos.push(p); }
-  review.marks.forEach((m, i) => {
-    if (!m || !m.kind || m.side !== mySide || !m.best) return;
-    const before = pos[i - 1];
-    const sfen = before.toSfen();
-    out.push({
-      id: sfen + '|' + m.best,
-      sfen,
-      best: m.best,
-      played: moveToUsi(game.moves[i - 1].move),
-      prevTo: i > 1 ? game.moves[i - 2].move.to : null,
-      kind: m.kind,
-      note: m.note || '',
-      ply: i,
-      gameKey: game.startSfen + '|' + game.moves.map((x) => moveToUsi(x.move)).join(' '),
-      date: game.header['開始日時'] || '',
-      box: 0, // 正解するたびに増え、出題されにくくなる
-      tries: 0,
-      correct: 0,
-      lastAt: 0,
-    });
+  const gameKey = game.startSfen + '|' + game.moves.map((x) => moveToUsi(x.move)).join(' ');
+  const base = (i, extra) => ({
+    sfen: pos[i].toSfen(),
+    prevTo: i > 0 ? game.moves[i - 1].move.to : null,
+    ply: i,
+    gameKey,
+    date: game.header['開始日時'] || '',
+    box: 0, tries: 0, correct: 0, lastAt: 0,
+    ...extra,
   });
+  // 自分の悪手
+  if (review.marks && mySide != null) {
+    review.marks.forEach((m, i) => {
+      if (!m || !m.kind || m.side !== mySide || !m.best) return;
+      const b = base(i - 1, { type: 'mistake', best: m.best, played: moveToUsi(game.moves[i - 1].move), kind: m.kind, note: m.note || '' });
+      b.id = b.sfen + '|' + m.best;
+      out.push(b);
+    });
+  }
+  let nextCount = 0;
+  const res = review.results;
+  for (let i = 0; i < pos.length; i++) {
+    const r = res[i];
+    if (!r || !r.best) continue;
+    const side = pos[i].turn;
+    const me = forSide(r.score, side);
+    // 詰み筋: 手番側に N手の詰みがある（同じ詰みの続きの局面は、最初の1つだけ）
+    if (me.mate != null && me.mate > 0 && me.mate <= 11 && !r.score.terminal) {
+      const prevSame = i >= 2 && res[i - 2] && (() => { const pm = forSide(res[i - 2].score, side); return pm.mate != null && pm.mate > 0; })();
+      if (!prevSame && r.pv && r.pv.length >= me.mate) {
+        const b = base(i, { type: 'mate', best: r.best, mateIn: me.mate, solution: r.pv.slice(0, me.mate) });
+        b.id = b.sfen + '|mate';
+        out.push(b);
+      }
+      continue;
+    }
+    // 次の一手: 2番目の手との差がはっきりしていて、形勢がまだ決まっていない局面
+    if (!r.score2 || me.mate != null || nextCount >= 6) continue;
+    const s2 = forSide(r.score2, side);
+    if (s2.mate != null && s2.mate > 0) continue;
+    if (Math.abs(me.cp) > 3000) continue;
+    const wrGap = wrOf(me) - wrOf(s2);
+    const cpGap = s2.mate != null ? 3000 : me.cp - s2.cp;
+    // 形勢が傾いた局面（±1500超）では勝率の差が出にくいので、評価値の差だけで「決め手」を探す
+    if (Math.abs(me.cp) > 1500 ? cpGap < 600 : (wrGap < NEXT_WR_GAP && cpGap < NEXT_CP_GAP)) continue;
+    // 取られた駒を取り返すだけの手は問題にしない
+    const bm = usiToMove(r.best);
+    if (i > 0 && !bm.drop && bm.to === game.moves[i - 1].move.to) continue;
+    const b = base(i, { type: 'next', best: r.best, pv: (r.pv || []).slice(0, 6), gap: Math.round(cpGap) });
+    b.id = b.sfen + '|' + r.best;
+    out.push(b);
+    nextCount++;
+  }
   return out;
 }
 
