@@ -13,16 +13,20 @@ const WORDS = [
   ['成', 'なり'], ['打', 'うつ'], ['右', 'みぎ'], ['左', 'ひだり'], ['上', 'あがる'], ['引', 'ひく'], ['寄', 'よる'], ['直', 'すぐ'],
 ];
 
-export function moveReading(pos, mv, prevTo) {
+// style: 'kana' は「ななはちきん」のようにひらがなを続けて書く（音声が1語として抑揚をつける）
+//        'kanji' は「７八金」のように符号のまま渡す（音声の辞書の読み方に任せる）
+export function moveReading(pos, mv, prevTo, style = 'kana') {
+  const side = pos.turn === SENTE ? 'せんて' : 'ごて';
   let s = moveToJa(pos, mv, prevTo, { mark: false });
+  if (style === 'kanji') return `${side}、${s.replace(/　/g, '')}`;
   let out = '';
-  // 先頭の「筋・段」を読みに
-  if (NUM[s[0]] && KAN[s[1]]) { out += `${NUM[s[0]]} ${KAN[s[1]]} `; s = s.slice(2); }
+  if (NUM[s[0]] && KAN[s[1]]) { out += NUM[s[0]] + KAN[s[1]]; s = s.slice(2); }
   while (s.length) {
     const w = WORDS.find(([k]) => s.startsWith(k));
     if (w) { out += w[1]; s = s.slice(w[0].length); } else { out += s[0]; s = s.slice(1); }
   }
-  return `${pos.turn === SENTE ? 'せんて' : 'ごて'}、${out.trim()}`;
+  // 区切りの空白は入れず、1つの言葉として読ませる
+  return `${side}、${out.replace(/\s+/g, '')}`;
 }
 
 export const speechSupported = () => typeof self !== 'undefined' && 'speechSynthesis' in self;

@@ -34,6 +34,7 @@ const state = {
   sound: true,
   clockSound: true,
   speech: false,
+  speechStyle: 'kana',
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -92,7 +93,7 @@ function beep(high) { try { playBeep(high); } catch { /* 無視 */ } }
 // 指し手の読み上げ（pos は指す前の局面）。対局中だけ読む
 function announce(pos, mv, prevTo) {
   if (!state.speech || state.mode !== 'play') return;
-  try { speak(moveReading(pos, mv, prevTo)); } catch { /* 無視 */ }
+  try { speak(moveReading(pos, mv, prevTo, state.speechStyle)); } catch { /* 無視 */ }
 }
 
 function playMove(mv) {
@@ -624,7 +625,8 @@ function tickClock() {
     const mainLeft = c.main[side] - elapsedNow();
     if (mainLeft > 0) {
       const m = Math.ceil(mainLeft / 60000);
-      if (b.lastMin[side] != null && m < b.lastMin[side]) beep(false);
+      // 残りが10分を切ってから、1分ごとに鳴らす
+      if (b.lastMin[side] != null && m < b.lastMin[side] && m <= 10) beep(false);
       b.lastMin[side] = m;
     } else if (c.byoyomi) {
       const left = Math.ceil((c.byoyomi + mainLeft) / 1000);
@@ -1627,6 +1629,7 @@ function persist() {
       sound: state.sound,
       clockSound: state.clockSound,
       speech: state.speech,
+      speechStyle: state.speechStyle,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
 }
@@ -1642,6 +1645,7 @@ function restore() {
       state.sound = s.sound !== false;
       state.clockSound = s.clockSound !== false;
       state.speech = !!s.speech;
+      state.speechStyle = s.speechStyle === 'kanji' ? 'kanji' : 'kana';
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
@@ -1725,6 +1729,14 @@ function bindUi() {
   $('chkSpeech').checked = state.speech;
   $('chkSpeech').disabled = !speechSupported();
   $('chkSpeech').onchange = (e) => { state.speech = e.target.checked; persist(); if (state.speech) speak('読み上げをオンにしました'); };
+  $('selSpeechStyle').value = state.speechStyle;
+  $('selSpeechStyle').onchange = (e) => {
+    state.speechStyle = e.target.value;
+    persist();
+    // 聞き比べられるように例を読む
+    const p = new Position();
+    speak(moveReading(p, usiToMove('6i7h'), null, state.speechStyle));
+  };
   $('chkClockSound').checked = state.clockSound;
   $('chkClockSound').onchange = (e) => { state.clockSound = e.target.checked; persist(); if (state.clockSound) beep(false); };
   $('chkSound').checked = state.sound;
