@@ -14,3 +14,7 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## shape1.txt（形の定跡）
+
+同じ新ペタショック定跡から作った、自分の駒の配置だけで引く表です。相手が定跡を外れても、自分の駒の形が定跡に出てきた形と同じなら、そこで指された駒組みの手（駒を取る手・打つ手を除く）を候補にします。`node tools/build_book.mjs <user_book1.db> <book.txt> 28 200 6 8 <shape1.txt>` で作ります。

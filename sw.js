@@ -5,11 +5,11 @@
 //
 // 公開するたびに VERSION を上げ、version.json の version と notes も同じ版に書き換える
 
-const VERSION = 'v18';
+const VERSION = 'v19';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
-const BOOK_CACHE = 'book-petabook233-v1';
+const BOOK_CACHE = 'book-petabook233-v2';
 
 const APP_FILES = [
   './', 'index.html', 'terms.html', 'tsume/tsume.txt', 'coi.js', 'css/style.css', 'manifest.webmanifest',

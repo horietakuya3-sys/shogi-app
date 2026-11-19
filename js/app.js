@@ -5,7 +5,7 @@ import {
 import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
-import { loadBook, bookReady } from './book.js';
+import { loadBook, bookReady, loadShape, shapeReady } from './book.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
@@ -515,9 +515,9 @@ function readPlaySheet() {
 }
 
 async function startPlay(cfg, fromHere) {
-  if (cfg.players.some((p) => p.type === 'ai') && !bookReady()) {
+  if (cfg.players.some((p) => p.type === 'ai') && (!bookReady() || !shapeReady())) {
     toast('定跡を読み込んでいます…', 10000);
-    try { await Promise.race([loadBook(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000))]); toast('定跡を読み込みました', 1500); }
+    try { await Promise.race([Promise.all([loadBook(), loadShape()]), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))]); toast('定跡を読み込みました', 1500); }
     catch { toast('定跡を読み込めなかったので、定跡なしで始めます', 3000); }
   }
   if (!state.engineReady && cfg.players.some((p) => p.type === 'ai')) {
@@ -706,7 +706,7 @@ async function nextTurn() {
   if (res.resign) { endPlay('投了', 1 - side); return; }
   if (res.win) { endPlay('入玉勝ち', side); return; }
   if (!curPos().isLegal(res.move)) { endPlay('中断', null); return; }
-  p.lastSrc = res.book ? '定跡' : res.plan ? '駒組み' : '読み';
+  p.lastSrc = res.book ? '定跡' : res.shape ? '定跡の形' : res.plan ? '駒組み' : '読み';
   playTurnMove(res.move);
   renderPlayInfo();
 }
@@ -1958,6 +1958,7 @@ async function main() {
     state.engineReady = true;
     requestAnalysis();
     loadBook().catch(() => { /* 対局を始めるときにもう一度読む */ });
+    loadShape().catch(() => { /* 同上 */ });
   } catch (e) {
     let msg = e.message === 'crossOriginIsolated'
       ? 'エンジンの準備中です。表示が変わらなければページを再読み込みしてください'

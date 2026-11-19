@@ -3,9 +3,9 @@ import fs from 'fs';
 import readline from 'readline';
 import { Position, STARTPOS, moveToUsi, usiToMove } from '../js/shogi.js';
 import { detectStrategy } from '../js/records.js';
-import { hashKey } from '../js/book.js';
+import { hashKey, shapeKey } from '../js/book.js';
 
-const [,, src, out, maxPlyArg, windowArg, topArg, fullPlyArg] = process.argv;
+const [,, src, out, maxPlyArg, windowArg, topArg, fullPlyArg, shapeOut] = process.argv;
 const FULL_PLY = Number(fullPlyArg || 0); // この手数までは、悪い手も含めて定跡の全部の手を辿る（相手がどう指しても定跡で受けられるように）
 const MAX_PLY = Number(maxPlyArg || 30);
 const WINDOW = Number(windowArg || 120); // 最善からこの評価値以内の手だけ残す
@@ -21,8 +21,10 @@ for await (const line of rl) {
     const parts = line.slice(5).split(' ');
     key = parts.slice(0, 3).join(' ');
     buf = [];
-  } else if (key && line && !line.startsWith('#')) {
-    buf.push(line);
+  } else if (key && line && !line.startsWith('#') && buf.length < 40) {
+    // 手は評価順に並んでいるので、上位だけ残してメモリを節約する
+    const t = line.split(' ');
+    buf.push(t[0] + ' ' + t[2]);
   }
 }
 if (key) book.set(key, buf.join('\n'));
@@ -56,7 +58,7 @@ let curPly = 0;
 function movesOf(k) {
   const v = book.get(k);
   if (!v) return null;
-  const ms = v.split('\n').map((l) => { const t = l.split(' '); return { usi: t[0], ev: Number(t[2]) }; }).filter((m) => m.usi && m.usi !== 'none');
+  const ms = v.split('\n').map((l) => { const t = l.split(' '); return { usi: t[0], ev: Number(t[1]) }; }).filter((m) => m.usi && m.usi !== 'none');
   if (!ms.length) return null;
   const best = Math.max(...ms.map((m) => m.ev));
   if (curPly < FULL_PLY) return ms.sort((a, b) => b.ev - a.ev);
@@ -64,11 +66,12 @@ function movesOf(k) {
 }
 
 const nodes = new Map(); // key -> { moves: [{usi, ev, child}], tags: [Set, Set] }
+const shapeSrc = []; // [shapeKey, turn, [{usi, ev, best, capture}], node]
 let leaves = 0;
 function dfs(pos, line) {
-  const k = pos.toSfen(false);
+  const k = hashKey(pos.toSfen(false));
   if (nodes.has(k)) return nodes.get(k);
-  const node = { moves: [], tags: [new Set(), new Set()] };
+  const node = { moves: [], dist: [new Float32Array(TAGS.length), new Float32Array(TAGS.length)] };
   nodes.set(k, node);
   curPly = line.length;
   const ms = line.length < MAX_PLY ? movesFor(pos) : null;
@@ -86,33 +89,67 @@ function dfs(pos, line) {
     node.moves.push({ usi: m.usi, ev: m.ev, child });
     any = true;
   }
+  if (any && shapeOut) {
+    const best = Math.max(...node.moves.map((m) => m.ev));
+    const caps = node.moves.map((m) => { const mv = usiToMove(m.usi); return !!(mv.from != null && pos.board[mv.to]) || m.usi[1] === '*'; });
+    shapeSrc.push([shapeKey(pos), pos.turn, node, best, caps]);
+  }
   if (!any) {
     leaves++;
-    for (const side of [0, 1]) node.tags[side].add(detectStrategy(STARTPOS, line, side));
+    for (const side of [0, 1]) { const i = TAGS.indexOf(detectStrategy(STARTPOS, line, side)); if (i >= 0) node.dist[side][i] = 1; }
   } else {
-    for (const m of node.moves) for (const side of [0, 1]) for (const t of m.child.tags[side]) node.tags[side].add(t);
+    // その先の葉で、それぞれの戦法になった割合（子の割合の平均）
+    for (const m of node.moves) for (const side of [0, 1]) for (let i = 0; i < TAGS.length; i++) node.dist[side][i] += m.child.dist[side][i] / node.moves.length;
   }
   return node;
 }
 dfs(new Position(), []);
 console.error('reachable positions', nodes.size, 'leaves', leaves);
 
-const mask = (set) => TAGS.reduce((a, t, i) => a | (set.has(t) ? 1 << i : 0), 0);
+// 戦法の印: その先の3割以上がその戦法になる手、または一番多い戦法（「その先で一度でも出てくる」では印がゆるすぎて、居飛車の手に振り飛車の印がついてしまう）
+const SHARE = 0.3;
+const mask = (d) => { const mx = Math.max(...d); return TAGS.reduce((a, t, i) => a | (d[i] > 0 && (d[i] >= SHARE || d[i] === mx) ? 1 << i : 0), 0); };
 const header = { v: 1, tags: TAGS, maxPly: MAX_PLY, src: 'new_petabook_20250505c (MIT License, yaneurao)' };
 const outLines = [JSON.stringify(header)];
 const seen = new Set();
 for (const [k, n] of nodes) {
   if (!n.moves.length) continue;
-  const h = hashKey(k);
+  const h = k;
   if (seen.has(h)) throw new Error('hash collision ' + k);
   seen.add(h);
-  outLines.push(h + '\t' + n.moves.map((m) => `${m.usi}:${m.ev}:${mask(m.child.tags[0]).toString(36)}:${mask(m.child.tags[1]).toString(36)}`).join(' '));
+  outLines.push(h + '\t' + n.moves.map((m) => `${m.usi}:${m.ev}:${mask(m.child.dist[0]).toString(36)}:${mask(m.child.dist[1]).toString(36)}`).join(' '));
 }
 fs.writeFileSync(out, outLines.join('\n') + '\n');
 console.error('written', outLines.length - 1, 'positions', fs.statSync(out).size, 'bytes');
 // 戦法ごとに、その戦法を指せる局面の数
 for (const side of [0, 1]) {
   const c = {};
-  for (const n of nodes.values()) for (const t of n.tags[side]) c[t] = (c[t] || 0) + 1;
+  for (const n of nodes.values()) { const m = mask(n.dist[side]); TAGS.forEach((t, i) => { if ((m >> i) & 1) c[t] = (c[t] || 0) + 1; }); }
   console.error(side === 0 ? '先手' : '後手', JSON.stringify(c));
+}
+
+// 形の定跡: 自分の駒の配置ごとに、定跡で指された駒組みの手（駒を取る手・打つ手は除く。最善から100以内）を集める
+if (shapeOut) {
+  const sh = new Map(); // key -> Map(usi(先手の向き) -> {n, ev, mask})
+  for (const [k, turn, node, best, caps] of shapeSrc) {
+    node.moves.forEach((m, i) => {
+      if (caps[i] || m.ev < best - 100) return;
+      const u = turn === 0 ? m.usi : rot(m.usi);
+      if (!sh.has(k)) sh.set(k, new Map());
+      const e = sh.get(k).get(u) || { n: 0, ev: 0, tn: new Array(TAGS.length).fill(0) };
+      e.n++; e.ev += m.ev - best;
+      const mk = mask(m.child.dist[turn]);
+      TAGS.forEach((_, i) => { if ((mk >> i) & 1) e.tn[i]++; });
+      sh.get(k).set(u, e);
+    });
+  }
+  const lines = [JSON.stringify({ v: 1, tags: TAGS })];
+  for (const [k, ms] of sh) {
+    const arr = [...ms].sort((a, b) => b[1].n - a[1].n).slice(0, 8);
+    // 同じ形で指された局面の半分以上でその戦法の印がつく手だけ、その戦法の手とする
+    const mk = (e) => e.tn.reduce((a, c, i) => a | (c * 2 >= e.n ? 1 << i : 0), 0);
+    lines.push(k + '\t' + arr.map(([u, e]) => `${u}:${e.n}:${Math.round(e.ev / e.n)}:${mk(e).toString(36)}`).join(' '));
+  }
+  fs.writeFileSync(shapeOut, lines.join('\n') + '\n');
+  console.error('shape keys', sh.size, fs.statSync(shapeOut).size, 'bytes');
 }

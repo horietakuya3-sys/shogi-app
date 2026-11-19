@@ -57,3 +57,61 @@ export function bookMoves(pos) {
 }
 
 export function bookMaxPly() { return data ? data.header.maxPly : 0; }
+
+// ---- 形の定跡: 自分の駒の配置だけで引く（相手が定跡を外れても、自分の駒組みは定跡の形をなぞれるように） ----
+export const SHAPE_URL = 'book/shape1.txt';
+const rotSq = (u) => { // 盤を180度回したUSI
+  const f = (c) => String(10 - Number(c));
+  const r = (c) => String.fromCharCode(97 + 105 - c.charCodeAt(0));
+  return f(u[0]) + r(u[1]) + f(u[2]) + r(u[3]) + (u[4] || '');
+};
+export { rotSq };
+// 手番側の駒だけを、手番側が先手になる向きで並べたキー
+export function shapeKey(pos) {
+  const me = pos.turn;
+  let s = '';
+  for (let i = 0; i < 81; i++) {
+    const idx = me === 0 ? i : 80 - i;
+    const pc = pos.board[idx];
+    if (!pc) continue;
+    const isMine = (pc.replace('+', '') === pc.replace('+', '').toUpperCase()) === (me === 0);
+    if (isMine) s += i.toString(36).padStart(2, '0') + pc.toUpperCase();
+  }
+  return hashKey(s);
+}
+let shapeLoading = null, shapeData = null;
+export function loadShape() {
+  if (shapeLoading) return shapeLoading;
+  shapeLoading = (async () => {
+    const res = await fetch(SHAPE_URL);
+    if (!res.ok) throw new Error('形の定跡を読み込めませんでした');
+    const text = await res.text();
+    const nl = text.indexOf('\n');
+    const header = JSON.parse(text.slice(0, nl));
+    const map = new Map();
+    let i = nl + 1;
+    while (i < text.length) {
+      let j = text.indexOf('\n', i);
+      if (j < 0) j = text.length;
+      const tab = text.indexOf('\t', i);
+      if (tab > i && tab < j) map.set(text.slice(i, tab), text.slice(tab + 1, j));
+      i = j + 1;
+    }
+    shapeData = { header, map };
+    return shapeData;
+  })().catch((e) => { shapeLoading = null; throw e; });
+  return shapeLoading;
+}
+export const shapeReady = () => !!shapeData;
+// 形の定跡の手: [{ usi（実際の盤の向き）, n（出てきた数）, ev, tags（指す側の戦法の集合） }]
+export function shapeMoves(pos) {
+  if (!shapeData) return null;
+  const v = shapeData.map.get(shapeKey(pos));
+  if (!v) return null;
+  const tags = shapeData.header.tags;
+  return v.split(' ').map((s) => {
+    const [u, n, ev, m] = s.split(':');
+    const mask = parseInt(m, 36);
+    return { usi: pos.turn === 0 ? u : rotSq(u), n: Number(n), ev: Number(ev), tags: new Set(tags.filter((_, i) => (mask >> i) & 1)) };
+  });
+}

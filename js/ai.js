@@ -1,6 +1,6 @@
 // 対局AI: レベルに応じた手の選び方と、戦法ごとの駒組み
 import { Position, SENTE, typeOf, colorOf, moveToUsi, usiToMove, sameMove } from './shogi.js';
-import { bookMoves, bookReady } from './book.js';
+import { bookMoves, bookReady, shapeMoves, shapeReady } from './book.js';
 
 // レベルごとの設定
 // nodes: 探索量 / mpv: 比べる候補の数 / tol: 許す評価値の損（これ以内の手からランダムに選ぶ）
@@ -118,6 +118,13 @@ export class AiPlayer {
 
   get castleName() { return this.castleKey ? CASTLES[this.castleKey].name : ''; }
 
+  // 飛車を初めの位置から動かしたか
+  rookSwung(pos) {
+    const me = pos.turn;
+    const pc = pos.board[me === SENTE ? 7 * 9 + 7 : 1 * 9 + 1]; // ２八 / ８二
+    return !(pc && colorOf(pc) === me && typeOf(pc) === 'R');
+  }
+
   // 定跡から選ぶ手（なければ null）
   bookMove(pos) {
     if (!bookReady()) return null;
@@ -128,14 +135,10 @@ export class AiPlayer {
     if (!ms || !ms.length) return null;
     const me = pos.turn;
     const best = Math.max(...ms.map((m) => m.ev));
-    const width = this.level >= 10 ? 30 : this.level >= 8 ? 60 : 100;
+    const width = this.level >= 10 ? 30 : 50; // 定跡でも評価の低い手（序盤の５二金右など）は選ばない
     let cands = ms.filter((m) => m.ev >= best - width);
-    // 振り飛車は、定跡の戦法の印が「その先で振り飛車になりうる」程度の意味しかなく居飛車のような手も混じるので、飛車を振るまでは定跡を使わない
-    if (STRATEGIES[this.strategyKey].ranged) {
-      const home = me === SENTE ? 7 * 9 + 7 : 1 * 9 + 1; // ２八 / ８二
-      const pc = pos.board[home];
-      if (pc && colorOf(pc) === me && typeOf(pc) === 'R') return null;
-    }
+    // 振り飛車は、定跡の戦法の印に居飛車のような手も混じるので、飛車を振るまでは定跡を使わない
+    if (STRATEGIES[this.strategyKey].ranged && !this.rookSwung(pos)) return null;
     if (this.strategyKey !== 'none') {
       if (!BOOK_TAGS.includes(this.strategyKey)) return null; // 棒銀など定跡で区別できない戦法は駒組み手順で指す
       cands = cands.filter((m) => m.tags[me].has(this.strategyKey));
@@ -148,6 +151,39 @@ export class AiPlayer {
     let r = Math.random() * w.reduce((a, b) => a + b, 0);
     for (let i = 0; i < ok.length; i++) { r -= w[i]; if (r <= 0) return ok[i].mv; }
     return ok[0].mv;
+  }
+
+  // 形の定跡の候補（自分の駒の配置が定跡に出てきた形と同じなら、そこで指された駒組みの手）。重みの大きい順
+  shapeCands(pos, legal) {
+    if (!shapeReady() || pos.ply > PLAN_MAX_PLY) return [];
+    const st = this.strategyKey;
+    // 振り飛車は、飛車を振るまでは駒組み手順で指す（形の定跡の印では居飛車の手が混じるため）
+    if (STRATEGIES[st].ranged && !this.rookSwung(pos)) return [];
+    const ms = shapeMoves(pos);
+    if (!ms) return [];
+    const fam = st === 'bougin' ? ['ibisha', 'kakugawari', 'aigakari'] : BOOK_TAGS.includes(st) ? [st] : null;
+    const out = [];
+    for (const m of ms) {
+      if (fam && !fam.some((t) => m.tags.has(t))) continue;
+      const mv = legal.find((x) => moveToUsi(x) === m.usi);
+      if (!mv || mv.from == null || pos.board[mv.to]) continue; // 駒を取る手・打つ手は除く
+      out.push({ mv, w: m.n * Math.exp(m.ev / 40) });
+    }
+    // 重みに応じてランダムに並べる（毎回同じ形にならないように）
+    return out.map((x) => ({ ...x, r: Math.random() ** (1 / x.w) })).sort((a, b) => b.r - a.r).map((x) => x.mv);
+  }
+
+  // 候補の手が、最善と比べて tol 以内の損か（読み直しが必要なら1回だけ読む）。null は中断
+  async lossOf(pos, mv, lines, bestV) {
+    const u = moveToUsi(mv);
+    const hit = lines.find((l) => l.pv[0] === u);
+    if (hit) return bestV - value(hit);
+    const p = pos.clone();
+    p.applyMove(mv);
+    const r2 = await this.engine.searchOnce({ sfen: p.toSfen(), multipv: 1, go: `go nodes ${Math.max(OPEN_NODES, this.cfg.nodes || 300000)}` });
+    if (!r2) return null;
+    const l2 = r2.lines[0];
+    return l2 ? bestV + value(l2) : 99999;
   }
 
   get strategyName() { return STRATEGIES[this.strategyKey].name; }
@@ -241,6 +277,25 @@ export class AiPlayer {
     if (!lines.length) return { move: usiToMove(res.bestmove) };
     const bestV = Math.max(...lines.map(value));
 
+    // 形の定跡（棒銀と囲いを指定したときは、駒組み手順を先に試す）
+    const legal = pos.legalMoves();
+    const shapeFirst = this.strategyKey !== 'bougin' && !this.castleChosen;
+    const tryShape = async () => {
+      const cs = this.shapeCands(pos, legal).slice(0, 2);
+      for (const mv of cs) {
+        const loss = await this.lossOf(pos, mv, lines, bestV);
+        if (loss == null) return null;
+        const isRook = typeOf(pos.board[mv.from]) === 'R';
+        if (loss <= (isRook && STRATEGIES[this.strategyKey].ranged ? PLAN_TOL_ATTACK : PLAN_TOL)) return { move: mv, shape: true };
+      }
+      return false;
+    };
+    if (shapeFirst) {
+      const r = await tryShape();
+      if (r === null) return null;
+      if (r) return r;
+    }
+
     // 戦法の駒組み（自然な手のときだけ。損が大きい手は指さない）
     const planMv = this.nextPlanMove(pos);
     if (planMv) {
@@ -263,6 +318,12 @@ export class AiPlayer {
       }
       // 3回続けて見送ったら、その手順は飛ばして次の手順へ
       if (++this.stepFails >= 3) { this.planIdx++; this.stepFails = 0; this.planFails++; }
+    }
+
+    if (!shapeFirst) {
+      const r = await tryShape();
+      if (r === null) return null;
+      if (r) return r;
     }
 
     // レベルに応じて、損が許容範囲の手から選ぶ（良い手ほど選ばれやすい）
