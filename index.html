@@ -54,6 +54,7 @@
     <span id="practiceInfo">復習</span>
     <div class="playbtns">
       <button id="btnPracticeShow">答えを見る</button>
+      <button id="btnPracticeRetry" class="hidden">もう一度</button>
       <button id="btnPracticeNext" class="hidden">次の問題</button>
       <button id="btnPracticeEnd" class="sub">終了</button>
     </div>
@@ -127,6 +128,7 @@
       </select>
     </div>
     <label class="row check"><span>駒音</span><input type="checkbox" id="chkSound" checked></label>
+    <label class="row check"><span>時計の音（持ち時間は1分ごと、秒読みは残り30秒と10秒から）</span><input type="checkbox" id="chkClockSound" checked></label>
     <button data-act="newGame">新しい盤（平手）</button>
     <button data-act="terms">利用規約・ライセンス</button>
     <button data-act="close" class="sub">閉じる</button>
@@ -141,12 +143,14 @@
       <select class="p-type"><option value="human">人</option><option value="ai">AI</option></select>
       <select class="p-level"></select>
       <select class="p-strategy"></select>
+      <select class="p-castle"></select>
     </div>
     <div class="side-cfg" data-side="1">
       <div class="side-name">☖ 後手</div>
       <select class="p-type"><option value="human">人</option><option value="ai" selected>AI</option></select>
       <select class="p-level"></select>
       <select class="p-strategy"></select>
+      <select class="p-castle"></select>
     </div>
     <div class="row">
       <span>持ち時間</span>
@@ -192,6 +196,7 @@
 <div class="sheet center hidden" id="confirmSheet">
   <div class="sheet-inner confirm">
     <div class="sheet-title" id="confirmText">よろしいですか？</div>
+    <label class="row check hidden" id="confirmRecordRow"><span>戦績に記録する</span><input type="checkbox" id="chkConfirmRecord"></label>
     <div class="promo-btns">
       <button id="btnConfirmCancel" class="sub">やめる</button>
       <button id="btnConfirmOk" class="primary">はい</button>

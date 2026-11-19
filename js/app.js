@@ -4,9 +4,10 @@ import {
 } from './shogi.js';
 import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
-import { AiPlayer, LEVELS, STRATEGIES } from './ai.js';
+import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
+import { loadBook, bookReady } from './book.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
-import { playPieceSound, unlockAudio } from './sound.js';
+import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
   buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES,
@@ -29,6 +30,7 @@ const state = {
   multipv: 3,
   reviewDepth: 'normal',
   sound: true,
+  clockSound: true,
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -83,6 +85,7 @@ function guessMySide(h = {}) {
 }
 
 function sound() { if (state.sound) { try { playPieceSound(); } catch { /* 無視 */ } } }
+function beep(high) { try { playBeep(high); } catch { /* 無視 */ } }
 
 function playMove(mv) {
   if (state.mode === 'play') { playTurnMove(mv); return; }
@@ -451,7 +454,7 @@ function loadPlayCfg() {
 
 function setupPlaySheet() {
   const cfg = loadPlayCfg() || {
-    players: [{ type: 'human', level: 5, strategy: 'auto' }, { type: 'ai', level: 5, strategy: 'auto' }],
+    players: [{ type: 'human', level: 5, strategy: 'auto', castle: 'auto' }, { type: 'ai', level: 5, strategy: 'auto', castle: 'auto' }],
     main: 600, byo: 30,
   };
   document.querySelectorAll('.side-cfg').forEach((row) => {
@@ -460,13 +463,24 @@ function setupPlaySheet() {
     const lv = row.querySelector('.p-level');
     const st = row.querySelector('.p-strategy');
     const ty = row.querySelector('.p-type');
+    const ca = row.querySelector('.p-castle');
     lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}</option>`).join('');
     st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.name}${v.note ? '（相手次第）' : ''}</option>`).join('');
+    ca.innerHTML = Object.entries(CASTLES).filter(([, v]) => !v.hidden)
+      .map(([k, v]) => `<option value="${k}">${k === 'auto' ? '囲い: ' : ''}${v.name}${v.side ? (v.side === 'right' ? '（振り飛車）' : '（居飛車）') : ''}</option>`).join('');
     ty.value = p.type;
     lv.value = String(p.level);
-    st.value = p.strategy;
-    const sync = () => { const ai = ty.value === 'ai'; lv.disabled = !ai; st.disabled = !ai; };
+    st.value = STRATEGIES[p.strategy] ? p.strategy : 'auto';
+    ca.value = CASTLES[p.castle] ? p.castle : 'auto';
+    const sync = () => {
+      const ai = ty.value === 'ai';
+      lv.disabled = !ai; st.disabled = !ai; ca.disabled = !ai;
+      // 戦法に合わない囲いは選べないようにする
+      for (const o of ca.options) o.disabled = o.value !== 'auto' && !castleFits(st.value, o.value);
+      if (ca.selectedOptions[0] && ca.selectedOptions[0].disabled) ca.value = 'auto';
+    };
     ty.onchange = sync;
+    st.onchange = sync;
     sync();
   });
   $('selMain').value = String(cfg.main);
@@ -480,6 +494,7 @@ function readPlaySheet() {
       type: row.querySelector('.p-type').value,
       level: Number(row.querySelector('.p-level').value),
       strategy: row.querySelector('.p-strategy').value,
+      castle: row.querySelector('.p-castle').value,
     };
   });
   const cfg = { players, main: Number($('selMain').value), byo: Number($('selByo').value) };
@@ -487,7 +502,12 @@ function readPlaySheet() {
   return cfg;
 }
 
-function startPlay(cfg, fromHere) {
+async function startPlay(cfg, fromHere) {
+  if (cfg.players.some((p) => p.type === 'ai') && !bookReady()) {
+    toast('定跡を読み込んでいます…', 10000);
+    try { await Promise.race([loadBook(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000))]); toast('定跡を読み込みました', 1500); }
+    catch { toast('定跡を読み込めなかったので、定跡なしで始めます', 3000); }
+  }
   if (!state.engineReady && cfg.players.some((p) => p.type === 'ai')) {
     toast('エンジンの準備ができてから始めてください');
     return;
@@ -497,9 +517,10 @@ function startPlay(cfg, fromHere) {
   const humans = cfg.players.filter((p) => p.type === 'human').length;
   const players = cfg.players.map((p, side) => {
     if (p.type === 'ai') {
-      const ai = new AiPlayer(engine, { level: p.level, strategy: p.strategy });
-      const stName = p.strategy === 'auto' ? 'おまかせ' : ai.strategyName;
-      return { ...p, ai, label: `AI ${LEVELS[p.level].name.split(' ')[0]}`, detail: stName };
+      const ai = new AiPlayer(engine, { level: p.level, strategy: p.strategy, castle: p.castle || 'auto' });
+      const real = ai.strategyName + (ai.castleName && !CASTLES[ai.castleKey].hidden ? `・${ai.castleName}` : '');
+      const stName = p.strategy === 'auto' ? 'ランダム' : real;
+      return { ...p, ai, label: `AI ${LEVELS[p.level].name.split(' ')[0]}`, detail: stName, real };
     }
     return { ...p, label: humans === 1 ? 'あなた' : (side === 0 ? '先手' : '後手') };
   });
@@ -509,6 +530,7 @@ function startPlay(cfg, fromHere) {
     clock: { enabled, main: [cfg.main * 1000, cfg.main * 1000], byoyomi: cfg.byo * 1000, turnStart: performance.now() },
     thinkId: 0,
     over: false,
+    beep: { lastMin: [null, null], marks: new Set(), side: null },
   };
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
@@ -583,8 +605,23 @@ function tickClock() {
     el.textContent = t.text;
     el.className = 'clock' + (t.moving ? ' active' : '') + (t.byo && t.moving ? ' byo' : '');
   }
-  // 時間切れ
+  // 時間の音（人の手番だけ）。持ち時間は1分ごと、秒読みは残り30秒で1回、10秒からは毎秒
   const side = curPos().turn;
+  if (p.players[side].type === 'human' && state.clockSound) {
+    const b = p.beep;
+    if (b.side !== side) { b.side = side; b.marks = new Set(); }
+    const mainLeft = c.main[side] - elapsedNow();
+    if (mainLeft > 0) {
+      const m = Math.ceil(mainLeft / 60000);
+      if (b.lastMin[side] != null && m < b.lastMin[side]) beep(false);
+      b.lastMin[side] = m;
+    } else if (c.byoyomi) {
+      const left = Math.ceil((c.byoyomi + mainLeft) / 1000);
+      if (left <= 30 && left > 10 && !b.marks.has(30)) { b.marks.add(30); beep(false); }
+      if (left <= 10 && left >= 1 && !b.marks.has(left)) { b.marks.add(left); beep(left <= 3); }
+    }
+  }
+  // 時間切れ
   const over = elapsedNow() - c.main[side];
   if (over > 0 && (!c.byoyomi || over > c.byoyomi + 300)) {
     endPlay('切れ負け', 1 - side);
@@ -654,7 +691,7 @@ async function nextTurn() {
   playTurnMove(res.move);
 }
 
-function endPlay(word, winner) {
+function endPlay(word, winner, { record = true } = {}) {
   const p = state.play;
   if (!p || p.over) return;
   p.over = true;
@@ -677,9 +714,12 @@ function endPlay(word, winner) {
   }
   // 対局の記録を残す（局後解析をすると内容が追加される）
   const aiP = p.players.find((x) => x.type === 'ai');
-  saveRecord('play', humans.length === 1 && aiP ? aiP.level : null);
+  if (record) saveRecord('play', humans.length === 1 && aiP ? aiP.level : null);
+  // ランダムにしていたAIの戦法を明かす
+  const reveal = p.players.map((x, i) => (x.ai ? `${i === 0 ? '☗' : '☖'}${x.label}の戦法: ${x.real}` : '')).filter(Boolean).join('\n');
   state.play = null;
-  $('endText').textContent = head === state.game.summary ? head : `${head}\n${state.game.summary}`;
+  $('endText').textContent = (head === state.game.summary ? head : `${head}\n${state.game.summary}`)
+    + (reveal ? `\n${reveal}` : '') + (record ? '' : '\n（戦績には記録していません）');
   $('endSheet').classList.remove('hidden');
   update();
 }
@@ -1079,9 +1119,21 @@ async function startPractice() {
   nextPractice();
 }
 
+// 同じ問題をもう一度（出題の頻度は、最初の解答で決めたまま変えない）
+function retryPractice() {
+  const pr = state.practice;
+  if (!pr || pr.phase !== 'done') return;
+  pr.idx--;
+  pr.retry = true;
+  nextPractice();
+}
+
 function nextPractice() {
   const pr = state.practice;
   if (!pr) return;
+  const retry = !!pr.retry;
+  pr.retry = false;
+  pr.retrying = retry;
   pr.idx++;
   if (pr.idx >= pr.queue.length) {
     toast(`復習おわり（${pr.queue.length}問中 ${pr.right}問正解）`, 3500);
@@ -1104,7 +1156,8 @@ function nextPractice() {
   $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　実戦では ${playedJa}（${it.note || it.kind}）。もっと良い手を指してください`;
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeNext').classList.add('hidden');
-  renderCandidates([], `${pos.turn === SENTE ? '☗先手' : '☖後手'}の番です。盤上で指してください`);
+  $('btnPracticeRetry').classList.add('hidden');
+  renderCandidates([], `${pos.turn === SENTE ? '☗先手' : '☖後手'}の番です。盤上で指してください` + (retry ? '（やり直し）' : ''));
   update();
 }
 
@@ -1140,13 +1193,16 @@ async function answerPractice(mv) {
     }
   }
   const loss = myV == null ? 9999 : Math.max(0, bestV - myV);
-  const ok = u === it.best || loss <= 80;
+  // 実戦と同じ手は「もっと良い手」ではないので不正解にする
+  const ok = u !== it.played && (u === it.best || loss <= 80);
   pr.lines = lines;
   pr.phase = 'done';
-  if (ok) pr.right++;
-  // 出題の頻度を更新
-  const upd = { ...it, tries: it.tries + 1, correct: it.correct + (ok ? 1 : 0), box: ok ? Math.min(MASTERED, it.box + 1) : 0, lastAt: Date.now() };
-  try { await putProblem(upd); } catch { /* 無視 */ }
+  if (ok && !pr.retrying) pr.right++;
+  // 出題の頻度を更新（やり直しのときは変えない）
+  if (!pr.retrying) {
+    const upd = { ...it, tries: it.tries + 1, correct: it.correct + (ok ? 1 : 0), box: ok ? Math.min(MASTERED, it.box + 1) : 0, lastAt: Date.now() };
+    try { await putProblem(upd); pr.queue[pr.idx] = upd; } catch { /* 無視 */ }
+  }
   const myJa = moveToJa(pos, mv, it.prevTo);
   // 最善手は、いま深く読んだ結果を優先して示す
   const bestU = lines[0] ? lines[0].pv[0] : it.best;
@@ -1157,6 +1213,7 @@ async function answerPractice(mv) {
   $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　${head}`;
   $('btnPracticeShow').classList.add('hidden');
   $('btnPracticeNext').classList.remove('hidden');
+  $('btnPracticeRetry').classList.remove('hidden');
   revealCandidates(pos, lines);
 }
 
@@ -1190,12 +1247,15 @@ async function revealPractice() {
   const pos = new Position(it.sfen);
   const lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]) : [];
   pr.phase = 'done';
-  const upd = { ...it, tries: it.tries + 1, box: 0, lastAt: Date.now() };
-  try { await putProblem(upd); } catch { /* 無視 */ }
+  if (!pr.retrying) {
+    const upd = { ...it, tries: it.tries + 1, box: 0, lastAt: Date.now() };
+    try { await putProblem(upd); pr.queue[pr.idx] = upd; } catch { /* 無視 */ }
+  }
   const bestU = lines[0] ? lines[0].pv[0] : it.best;
   $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　答え: ${moveToJa(pos, usiToMove(bestU), it.prevTo)}`;
   $('btnPracticeShow').classList.add('hidden');
   $('btnPracticeNext').classList.remove('hidden');
+  $('btnPracticeRetry').classList.remove('hidden');
   revealCandidates(pos, lines);
 }
 
@@ -1309,6 +1369,7 @@ function persist() {
       multipv: state.multipv,
       reviewDepth: state.reviewDepth,
       sound: state.sound,
+      clockSound: state.clockSound,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
 }
@@ -1322,6 +1383,7 @@ function restore() {
       state.multipv = s.multipv || 3;
       state.reviewDepth = s.reviewDepth || 'normal';
       state.sound = s.sound !== false;
+      state.clockSound = s.clockSound !== false;
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
@@ -1402,6 +1464,8 @@ function bindUi() {
   });
   $('selMultiPV').value = String(state.multipv);
   $('selMultiPV').onchange = (e) => { state.multipv = Number(e.target.value); persist(); requestAnalysis(); };
+  $('chkClockSound').checked = state.clockSound;
+  $('chkClockSound').onchange = (e) => { state.clockSound = e.target.checked; persist(); if (state.clockSound) beep(false); };
   $('chkSound').checked = state.sound;
   $('chkSound').onchange = (e) => { state.sound = e.target.checked; persist(); if (state.sound) sound(); };
   // シートを開いている間は後ろの画面をスクロールさせない
@@ -1435,11 +1499,11 @@ function bindUi() {
     const humans = p.players.map((x, i) => (x.type === 'human' ? i : -1)).filter((i) => i >= 0);
     if (!humans.length) return;
     const side = humans.length === 1 ? humans[0] : curPos().turn;
-    confirmSheet('投了しますか？', '投了する').then((ok) => { if (ok && state.play === p) endPlay('投了', 1 - side); });
+    confirmSheet('投了しますか？', '投了する', true).then((r) => { if (r.ok && state.play === p) endPlay('投了', 1 - side, { record: r.checked }); });
   };
   $('btnAbort').onclick = () => {
     const p = state.play;
-    confirmSheet('対局を中断しますか？', '中断する').then((ok) => { if (ok && state.play === p) endPlay('中断', null); });
+    confirmSheet('対局を中断しますか？', '中断する', false).then((r) => { if (r.ok && state.play === p) endPlay('中断', null, { record: r.checked }); });
   };
   $('btnEndReview').onclick = () => { $('endSheet').classList.add('hidden'); state.cursor = 0; startReview(); };
   $('btnEndClose').onclick = () => $('endSheet').classList.add('hidden');
@@ -1456,6 +1520,7 @@ function bindUi() {
   $('importInput').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) importData(await f.text()); };
   $('btnPracticeShow').onclick = () => revealPractice();
   $('btnPracticeNext').onclick = () => nextPractice();
+  $('btnPracticeRetry').onclick = () => retryPractice();
   $('btnPracticeEnd').onclick = () => endPractice();
 
   // 局後解析
@@ -1483,16 +1548,20 @@ function bindUi() {
 }
 
 // 確認用の小さな画面（ブラウザのダイアログは使わない）
-function confirmSheet(msg, okLabel = 'はい') {
+// recordDefault を渡すと「戦績に記録する」のチェックを出す。戻り値 { ok, checked }
+function confirmSheet(msg, okLabel = 'はい', recordDefault = null) {
   return new Promise((resolve) => {
     const sh = $('confirmSheet');
     $('confirmText').textContent = msg;
     $('btnConfirmOk').textContent = okLabel;
+    const row = $('confirmRecordRow');
+    row.classList.toggle('hidden', recordDefault == null);
+    $('chkConfirmRecord').checked = !!recordDefault;
     sh.classList.remove('hidden');
     const done = (v) => {
       sh.classList.add('hidden');
       $('btnConfirmOk').onclick = $('btnConfirmCancel').onclick = sh.onclick = null;
-      resolve(v);
+      resolve({ ok: v, checked: $('chkConfirmRecord').checked });
     };
     $('btnConfirmOk').onclick = (e) => { e.stopPropagation(); done(true); };
     $('btnConfirmCancel').onclick = (e) => { e.stopPropagation(); done(false); };
@@ -1526,6 +1595,7 @@ async function main() {
     await engine.init();
     state.engineReady = true;
     requestAnalysis();
+    loadBook().catch(() => { /* 対局を始めるときにもう一度読む */ });
   } catch (e) {
     const msg = e.message === 'crossOriginIsolated'
       ? 'エンジンの準備中です。表示が変わらなければページを再読み込みしてください'

@@ -3,14 +3,15 @@
 // 2. オフラインでも開けるようにキャッシュする
 // 3. 他アプリからの棋譜共有（Web Share Target）を受け取る
 
-const VERSION = 'v7';
+const VERSION = 'v8';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
+const BOOK_CACHE = 'book-petabook233-v1';
 
 const APP_FILES = [
   './', 'index.html', 'terms.html', 'coi.js', 'css/style.css', 'manifest.webmanifest',
-  'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js', 'js/ai.js', 'js/review.js', 'js/records.js', 'js/sound.js',
+  'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js', 'js/ai.js', 'js/review.js', 'js/records.js', 'js/sound.js', 'js/book.js',
   'icons/icon-192.png', 'icons/icon-512.png',
 ];
 const ENGINE_FILES = [
@@ -30,7 +31,7 @@ self.addEventListener('install', (ev) => {
 self.addEventListener('activate', (ev) => {
   ev.waitUntil((async () => {
     for (const k of await caches.keys()) {
-      if (k !== APP_CACHE && k !== ENGINE_CACHE && k !== SHARE_CACHE) await caches.delete(k);
+      if (![APP_CACHE, ENGINE_CACHE, SHARE_CACHE, BOOK_CACHE].includes(k)) await caches.delete(k);
     }
     await self.clients.claim();
   })());
@@ -70,14 +71,15 @@ self.addEventListener('fetch', (ev) => {
     return;
   }
   if (req.method !== 'GET') return;
-  const isEngine = url.pathname.includes('/engine/');
+  const isEngine = url.pathname.includes('/engine/') || url.pathname.includes('/book/');
+  const bigCache = url.pathname.includes('/book/') ? BOOK_CACHE : ENGINE_CACHE;
   ev.respondWith((async () => {
     if (isEngine) {
       // エンジンは大きく変わらないのでキャッシュ優先
       const hit = await caches.match(req, { ignoreSearch: true });
       if (hit) return withIsolation(hit);
       const res = await fetch(req);
-      if (res.ok) (await caches.open(ENGINE_CACHE)).put(req, res.clone());
+      if (res.ok) (await caches.open(bigCache)).put(req, res.clone());
       return withIsolation(res);
     }
     // アプリ本体はネット優先（更新をすぐ反映）、つながらなければキャッシュ

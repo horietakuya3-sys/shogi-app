@@ -52,6 +52,24 @@ export function playPieceSound() {
   }
 }
 
+// 時計の「ピッ」。high は最後の数秒用の高い音
+export function playBeep(high = false) {
+  const ac = audio();
+  if (!ac) return;
+  const t = ac.currentTime + 0.005;
+  const o = ac.createOscillator();
+  o.type = 'sine';
+  o.frequency.value = high ? 2000 : 1500;
+  const g = ac.createGain();
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(0.35, t + 0.005);
+  g.gain.setValueAtTime(0.35, t + 0.07);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+  o.connect(g).connect(ac.destination);
+  o.start(t);
+  o.stop(t + 0.12);
+}
+
 // 最初の操作で音を出せる状態にしておく（ブラウザの自動再生制限のため）
 export function unlockAudio() {
   const fn = () => { audio(); document.removeEventListener('pointerdown', fn); };
