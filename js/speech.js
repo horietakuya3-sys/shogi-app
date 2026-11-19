@@ -1,5 +1,6 @@
 // 指し手の読み上げ（ブラウザの音声合成を使う）
-import { SENTE, moveToJa } from './shogi.js';
+import { SENTE, moveToJa, fileOf, rankOf, typeOf } from './shogi.js';
+import { audio } from './sound.js';
 
 // 将棋の符号の読み方: 2は「にい」、5は「ごお」と伸ばす
 const NUM = { '１': 'いち', '２': 'にい', '３': 'さん', '４': 'よん', '５': 'ごお', '６': 'ろく', '７': 'なな', '８': 'はち', '９': 'きゅう' };
@@ -53,4 +54,69 @@ export function speak(text) {
   if (voice || pickVoice()) u.voice = voice;
   u.rate = 1.05;
   speechSynthesis.speak(u);
+}
+
+// ---- アクセントを調整した音声（Open JTalk と HTS Voice「Mei」で前もって作った音をつなぐ） ----
+// 座標は「ななは↘ち」のように3モーラ目のあとで下がる1語、駒の名前などは別の句で平らに読む
+let sprite = null, spriteLoading = null;
+export function loadVoice() {
+  if (spriteLoading) return spriteLoading;
+  spriteLoading = (async () => {
+    const ac = audio();
+    if (!ac) throw new Error('音声を再生できません');
+    const [meta, buf] = await Promise.all([
+      fetch('voice/sprite.json').then((r) => r.json()),
+      fetch('voice/sprite.mp3').then((r) => r.arrayBuffer()),
+    ]);
+    const data = await new Promise((res, rej) => ac.decodeAudioData(buf, res, rej));
+    sprite = { meta, data };
+    return sprite;
+  })().catch((e) => { spriteLoading = null; throw e; });
+  return spriteLoading;
+}
+
+const SUFFIX = { '成': 'nari', '不成': 'narazu', '打': 'utsu', '右': 'migi', '左': 'hidari', '上': 'agaru', '引': 'hiku', '寄': 'yoru', '直': 'sugu' };
+
+// 指し手を音のかけら（キー）の並びにする
+export function moveClips(pos, mv, prevTo) {
+  const keys = [pos.turn === SENTE ? 'sente' : 'gote'];
+  keys.push(prevTo === mv.to ? 'dou' : `${fileOf(mv.to)}${rankOf(mv.to)}`);
+  const ja = moveToJa(pos, mv, prevTo, { mark: false });
+  if (mv.drop) {
+    keys.push(mv.drop, 'utsu');
+    return keys;
+  }
+  keys.push(typeOf(pos.board[mv.from]));
+  // 駒の名前より後ろ（成・不成・右・上など）
+  let rest = ja.replace(/^(同　|[１-９][一二三四五六七八九])/, '').replace(/^(成香|成桂|成銀|[歩香桂銀金角飛玉王と馬龍竜])/, '');
+  while (rest.length) {
+    if (rest.startsWith('不成')) { keys.push('narazu'); rest = rest.slice(2); continue; }
+    const k = SUFFIX[rest[0]];
+    if (k) keys.push(k);
+    rest = rest.slice(1);
+  }
+  return keys;
+}
+
+let playingUntil = 0;
+export function playClips(keys) {
+  const ac = audio();
+  if (!ac || !sprite) return false;
+  const { clips } = sprite.meta;
+  let t = Math.max(ac.currentTime + 0.03, playingUntil);
+  keys.forEach((k, i) => {
+    const c = clips[k];
+    if (!c) return;
+    const src = ac.createBufferSource();
+    src.buffer = sprite.data;
+    const g = ac.createGain();
+    g.gain.value = 1.4;
+    src.connect(g).connect(ac.destination);
+    // 圧縮で前後にずれることがあるので、少し広めに切り出す
+    const start = Math.max(0, c[0] - 0.02), dur = c[1] + 0.04;
+    src.start(t, start, dur);
+    t += dur + (i === 0 ? 0.08 : 0.0);
+  });
+  playingUntil = t + 0.05;
+  return true;
 }

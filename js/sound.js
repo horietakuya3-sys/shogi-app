@@ -1,7 +1,7 @@
 // 駒音（音声ファイルを使わず Web Audio で合成する）
 let ctx = null;
 
-function audio() {
+export function audio() {
   if (!ctx) {
     const AC = self.AudioContext || self.webkitAudioContext;
     if (!AC) return null;

@@ -8,7 +8,7 @@ import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
-import { moveReading, speak, speechSupported } from './speech.js';
+import { moveReading, speak, speechSupported, loadVoice, moveClips, playClips } from './speech.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
   buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES,
@@ -34,7 +34,7 @@ const state = {
   sound: true,
   clockSound: true,
   speech: false,
-  speechStyle: 'kana',
+  speechStyle: 'voice',
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -93,7 +93,11 @@ function beep(high) { try { playBeep(high); } catch { /* 無視 */ } }
 // 指し手の読み上げ（pos は指す前の局面）。対局中だけ読む
 function announce(pos, mv, prevTo) {
   if (!state.speech || state.mode !== 'play') return;
-  try { speak(moveReading(pos, mv, prevTo, state.speechStyle)); } catch { /* 無視 */ }
+  try {
+    // 調整した音声が使えればそれを使い、だめなら端末の音声で読む
+    if (state.speechStyle === 'voice' && playClips(moveClips(pos, mv, prevTo))) return;
+    speak(moveReading(pos, mv, prevTo, state.speechStyle === 'kanji' ? 'kanji' : 'kana'));
+  } catch { /* 無視 */ }
 }
 
 function playMove(mv) {
@@ -571,6 +575,7 @@ async function startPlay(cfg, fromHere) {
   renderPlayInfo();
   update();
   startClockTimer();
+  if (state.speech && state.speechStyle === 'voice') loadVoice().catch(() => { /* 端末の音声で読む */ });
   nextTurn();
 }
 
@@ -1630,6 +1635,7 @@ function persist() {
       clockSound: state.clockSound,
       speech: state.speech,
       speechStyle: state.speechStyle,
+      speechStyleV: 2,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
 }
@@ -1645,7 +1651,8 @@ function restore() {
       state.sound = s.sound !== false;
       state.clockSound = s.clockSound !== false;
       state.speech = !!s.speech;
-      state.speechStyle = s.speechStyle === 'kanji' ? 'kanji' : 'kana';
+      state.speechStyle = ['voice', 'kana', 'kanji'].includes(s.speechStyle) ? s.speechStyle : 'voice';
+      if (s.speechStyleV !== 2) state.speechStyle = 'voice'; // 新しい音声を一度は試してもらう
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
@@ -1728,14 +1735,23 @@ function bindUi() {
   $('selMultiPV').onchange = (e) => { state.multipv = Number(e.target.value); persist(); requestAnalysis(); };
   $('chkSpeech').checked = state.speech;
   $('chkSpeech').disabled = !speechSupported();
-  $('chkSpeech').onchange = (e) => { state.speech = e.target.checked; persist(); if (state.speech) speak('読み上げをオンにしました'); };
+  $('chkSpeech').onchange = (e) => {
+    state.speech = e.target.checked;
+    persist();
+    if (state.speech) loadVoice().catch(() => { /* 端末の音声で読む */ });
+  };
   $('selSpeechStyle').value = state.speechStyle;
-  $('selSpeechStyle').onchange = (e) => {
+  $('selSpeechStyle').onchange = async (e) => {
     state.speechStyle = e.target.value;
     persist();
     // 聞き比べられるように例を読む
     const p = new Position();
-    speak(moveReading(p, usiToMove('6i7h'), null, state.speechStyle));
+    const mv = usiToMove('6i7h');
+    if (state.speechStyle === 'voice') {
+      try { await loadVoice(); playClips(moveClips(p, mv, null)); } catch { toast('音声を読み込めませんでした'); }
+    } else {
+      speak(moveReading(p, mv, null, state.speechStyle));
+    }
   };
   $('chkClockSound').checked = state.clockSound;
   $('chkClockSound').onchange = (e) => { state.clockSound = e.target.checked; persist(); if (state.clockSound) beep(false); };
