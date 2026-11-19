@@ -89,9 +89,9 @@ function guessMySide(h = {}) {
 
 function sound() { if (state.sound) { try { playPieceSound(); } catch { /* 無視 */ } } }
 function beep(high) { try { playBeep(high); } catch { /* 無視 */ } }
-// 指し手の読み上げ（pos は指す前の局面）
+// 指し手の読み上げ（pos は指す前の局面）。対局中だけ読む
 function announce(pos, mv, prevTo) {
-  if (!state.speech) return;
+  if (!state.speech || state.mode !== 'play') return;
   try { speak(moveReading(pos, mv, prevTo)); } catch { /* 無視 */ }
 }
 
@@ -99,7 +99,7 @@ function playMove(mv) {
   if (state.mode === 'play') { playTurnMove(mv); return; }
   if (state.mode === 'practice') { answerPractice(mv); return; }
   sound();
-  announce(curPos(), mv, prevMove() ? prevMove().to : null);
+
   const ln = line();
   const next = ln[state.cursor];
   if (next && sameMove(next.move, mv)) { // 次の手と同じなら進むだけ
@@ -1351,7 +1351,6 @@ async function answerPractice(mv) {
   if (!pr || pr.phase !== 'ask') return;
   if (isMateType(pr.item)) { answerMate(mv); return; }
   sound();
-  announce(curPos(), mv, pr.item.prevTo);
   pr.phase = 'judging';
   const it = pr.item;
   const pos = new Position(it.sfen);
@@ -1428,7 +1427,6 @@ async function answerMate(mv) {
   const pr = state.practice;
   const it = pr.item;
   sound();
-  announce(curPos(), mv, prevMove() ? prevMove().to : it.prevTo);
   pr.phase = 'judging';
   state.game.moves.push({ move: mv, comment: '' });
   state.cursor = state.game.moves.length;
@@ -1461,7 +1459,6 @@ async function answerMate(mv) {
   const reply = usiToMove(res.bestmove);
   if (!after.isLegal(reply)) { finishMate(false, '判定できませんでした'); return; }
   sound();
-  announce(after, reply, mv.to);
   state.game.moves.push({ move: reply, comment: '' });
   state.cursor = state.game.moves.length;
   pr.phase = 'ask';
