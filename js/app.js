@@ -13,6 +13,7 @@ import {
   buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES,
 } from './records.js';
 import { value as lineValue } from './ai.js';
+import { computeRatings, rankOf, nextRank, isRated, timeClass, TIME_CLASSES, AI_RATING, PROVISIONAL_GAMES } from './rating.js';
 
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'shogi-app:v1';
@@ -464,7 +465,7 @@ function setupPlaySheet() {
     const st = row.querySelector('.p-strategy');
     const ty = row.querySelector('.p-type');
     const ca = row.querySelector('.p-castle');
-    lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}</option>`).join('');
+    lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}（R${AI_RATING[i + 1]}）</option>`).join('');
     st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.name}${v.note ? '（相手次第）' : ''}</option>`).join('');
     ca.innerHTML = Object.entries(CASTLES).filter(([, v]) => !v.hidden)
       .map(([k, v]) => `<option value="${k}">${k === 'auto' ? '囲い: ' : ''}${v.name}${v.side ? (v.side === 'right' ? '（振り飛車）' : '（居飛車）') : ''}</option>`).join('');
@@ -528,6 +529,8 @@ async function startPlay(cfg, fromHere) {
   state.play = {
     players,
     clock: { enabled, main: [cfg.main * 1000, cfg.main * 1000], byoyomi: cfg.byo * 1000, turnStart: performance.now() },
+    timeControl: { main: cfg.main, byo: cfg.byo },
+    undoCount: 0,
     thinkId: 0,
     over: false,
     beep: { lastMin: [null, null], marks: new Set(), side: null },
@@ -714,11 +717,14 @@ function endPlay(word, winner, { record = true } = {}) {
   }
   // 対局の記録を残す（局後解析をすると内容が追加される）
   const aiP = p.players.find((x) => x.type === 'ai');
-  if (record) saveRecord('play', humans.length === 1 && aiP ? aiP.level : null);
+  const ratedGame = record && humans.length === 1 && aiP;
+  const saving = record ? saveRecord('play', humans.length === 1 && aiP ? aiP.level : null, { timeControl: p.timeControl, undo: p.undoCount }) : null;
+  if (ratedGame && saving) saving.then((key) => showRatingChange(key, p.undoCount));
   // ランダムにしていたAIの戦法を明かす
   const reveal = p.players.map((x, i) => (x.ai ? `${i === 0 ? '☗' : '☖'}${x.label}の戦法: ${x.real}` : '')).filter(Boolean).join('\n');
   state.play = null;
   setTimeout(askPendingUpdate, 1500);
+  $('endRating').textContent = '';
   $('endText').textContent = (head === state.game.summary ? head : `${head}\n${state.game.summary}`)
     + (reveal ? `\n${reveal}` : '') + (record ? '' : '\n（戦績には記録していません）');
   $('endSheet').classList.remove('hidden');
@@ -731,6 +737,7 @@ function undoMove() {
   const humans = p.players.map((x, i) => (x.type === 'human' ? i : -1)).filter((i) => i >= 0);
   if (!humans.length || !state.game.moves.length) return;
   p.thinkId++;
+  p.undoCount++;
   engine.stop();
   state.game.moves.pop();
   // 人対AIなら、人の手番に戻るまで戻す
@@ -955,12 +962,12 @@ function jumpMistake(dir) {
 }
 
 // ---- 対局の記録 ----
-async function saveRecord(source, aiLevel) {
-  if (!state.game.moves.length) return;
+async function saveRecord(source, aiLevel, extra = {}) {
+  if (!state.game.moves.length) return null;
   try {
     const r = state.review;
     const hasReview = r.key === gameKey() && r.results.length && r.results.every(Boolean) && r.results.length === state.game.moves.length + 1;
-    const rec = buildRecord(state.game, hasReview ? r : null, { source: source || undefined, aiLevel });
+    const rec = buildRecord(state.game, hasReview ? r : null, { source: source || undefined, aiLevel, ...extra });
     const old = await getGame(rec.key);
     if (old) {
       rec.source = source || old.source;
@@ -968,6 +975,8 @@ async function saveRecord(source, aiLevel) {
       rec.date = old.date || rec.date;
       rec.savedAt = old.savedAt;
       if (!rec.stats && old.stats) rec.stats = old.stats;
+      if (!rec.timeControl && old.timeControl) rec.timeControl = old.timeControl;
+      if (!extra.undo && old.undo) rec.undo = old.undo;
       if (!hasReview && old.results) rec.results = old.results;
     }
     // 問題づくり（次の一手と詰み筋は、どちらの側の手番からも作る）
@@ -979,7 +988,34 @@ async function saveRecord(source, aiLevel) {
     if (hasReview) rec.results = r.results.map((x) => ({ score: x.score, best: x.best, pv: (x.pv || []).slice(0, 12) }));
     rec.problemsV = 2;
     await putGame(rec);
+    return rec.key;
   } catch (e) { console.error('記録の保存に失敗', e); }
+  return null;
+}
+
+// 終局画面に、レーティングの変化と段級位を出す
+async function showRatingChange(key, undo) {
+  const el = $('endRating');
+  el.textContent = '';
+  if (undo) { el.textContent = '待ったをした対局なので、レーティングには入れていません'; return; }
+  try {
+    const { overall, byTime, perGame } = computeRatings(await getAllGames());
+    const g = perGame.get(key);
+    if (!g) return;
+    const d = Math.round(g.after - g.before);
+    const lines = [];
+    const prov = overall.n < PROVISIONAL_GAMES ? '（仮）' : '';
+    lines.push(`レーティング ${Math.round(g.after)}${prov}（${d >= 0 ? '+' : ''}${d}）　${rankOf(g.after)}`);
+    const rb = rankOf(g.before), ra = rankOf(g.after);
+    // 仮のうちは段級位が大きく動くので、昇段・昇級の知らせは確定してから
+    if (rb !== ra && overall.n >= PROVISIONAL_GAMES) lines.push(g.after > g.before ? `${ra}に昇段・昇級しました！` : `${ra}になりました`);
+    if (g.timeKey && g.tAfter != null) {
+      const t = byTime[g.timeKey];
+      const td = Math.round(g.tAfter - g.tBefore);
+      lines.push(`${TIME_CLASSES[g.timeKey]}: ${Math.round(g.tAfter)}（${td >= 0 ? '+' : ''}${td}）　${rankOf(g.tAfter)}` + (t.n < PROVISIONAL_GAMES ? '（仮）' : ''));
+    }
+    el.textContent = lines.join('\n');
+  } catch { /* 表示できなくても対局は終わっている */ }
 }
 
 // ---- プロフィール ----
@@ -1000,9 +1036,49 @@ async function openProfile() {
     body.appendChild(el('div', 'pf-empty', 'まだ記録がありません。AIと対局するか、自分の対局の棋譜を読み込んで局後解析すると、ここに集計されます。'));
     return;
   }
+  const sec = (title) => { const s = el('section', 'pf-sec'); s.appendChild(el('h3', null, title)); body.appendChild(s); return s; };
+  // レーティングと段級位
+  const rt = computeRatings(games);
+  const s0 = sec('レーティング・段級位');
+  if (!rt.overall.n) {
+    s0.appendChild(el('div', 'pf-sub', 'AIと対局すると計算されます（人1人対AI、待ったなし、勝敗がついた対局）'));
+  } else {
+    const R = rt.overall.r;
+    const row = el('div', 'pf-rating');
+    row.appendChild(el('span', 'r', String(Math.round(R))));
+    row.appendChild(el('span', 'rank', rankOf(R)));
+    if (rt.overall.n < PROVISIONAL_GAMES) row.appendChild(el('span', 'pf-sub', `仮（あと${PROVISIONAL_GAMES - rt.overall.n}局で確定）`));
+    s0.appendChild(row);
+    const nx = nextRank(R);
+    if (nx) s0.appendChild(el('div', 'pf-sub', `${nx.name}まであと${nx.need}点・対局数 ${rt.overall.n}局`));
+    if (rt.overall.hist.length >= 2) {
+      const h = [1000, ...rt.overall.hist];
+      const lo = Math.min(...h) - 50, hi = Math.max(...h) + 50;
+      const W = 300, H = 60;
+      const pts = h.map((v, i) => `${(i / (h.length - 1)) * W},${H - ((v - lo) / (hi - lo)) * H}`).join(' ');
+      const sv = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      sv.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      sv.setAttribute('preserveAspectRatio', 'none');
+      sv.classList.add('pf-spark');
+      sv.innerHTML = `<polyline points="${pts}" fill="none" stroke="#ffc98f" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+      s0.appendChild(sv);
+    }
+    const keys = Object.keys(TIME_CLASSES).filter((k) => rt.byTime[k]);
+    if (keys.length) {
+      const tb = el('table', 'pf-table');
+      tb.innerHTML = '<tr><th>持ち時間</th><th>R</th><th>段級位</th><th>局</th></tr>';
+      for (const k of keys) {
+        const t = rt.byTime[k];
+        const tr = document.createElement('tr');
+        for (const v of [TIME_CLASSES[k], Math.round(t.r) + (t.n < PROVISIONAL_GAMES ? '（仮）' : ''), rankOf(t.r), t.n]) tr.appendChild(el('td', null, String(v)));
+        tb.appendChild(tr);
+      }
+      s0.appendChild(tb);
+    }
+  }
+  s0.appendChild(el('div', 'pf-sub', `このアプリ独自の目安で、公式の段級位とは関係ありません。AIの強さの目安: ${AI_RATING.slice(1).map((r, i) => `Lv${i + 1}=${r}`).join('・')}`));
   // 戦績
   const t = a.total;
-  const sec = (title) => { const s = el('section', 'pf-sec'); s.appendChild(el('h3', null, title)); body.appendChild(s); return s; };
   const s1 = sec('戦績');
   const wl = t.win + t.lose;
   s1.appendChild(el('div', 'pf-big', `${t.win}勝 ${t.lose}敗` + (t.draw ? ` ${t.draw}分` : '') + (wl ? `　勝率 ${pct(t.win / wl)}` : '')));

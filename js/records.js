@@ -129,6 +129,8 @@ export function buildRecord(game, review, extra = {}) {
     oppStrategy: me == null ? null : detectStrategy(game.startSfen, game.moves, 1 - me),
     opponent: me == null ? '' : (me === SENTE ? game.header['後手'] : game.header['先手']) || '',
     aiLevel: extra.aiLevel || null,
+    timeControl: extra.timeControl || null, // { main: 秒, byo: 秒 }（アプリ内の対局だけ）
+    undo: extra.undo || 0, // 待ったの回数（待ったをした対局はレーティングに入れない）
     stats: null,
   };
   if (review && review.marks && me != null) {
@@ -265,7 +267,7 @@ export function aggregate(games) {
   const byOpp = group((g) => g.oppStrategy);
   const byLevel = group((g) => (g.aiLevel ? `Lv${g.aiLevel}` : null));
   // 得意戦法: 3局以上指した中で勝率が最も高いもの
-  const fav = byMy.filter((o) => o.games >= 3).sort((a, b) => b.rate - a.rate)[0] || byMy[0] || null;
+  const fav = byMy.filter((o) => o.games >= 3 && o.win > 0).sort((a, b) => b.rate - a.rate)[0] || byMy.filter((o) => o.win > 0).sort((a, b) => b.win - a.win)[0] || null;
 
   // 苦手（数字つきの指摘）
   const weak = [];
