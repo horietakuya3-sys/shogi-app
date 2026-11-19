@@ -1,5 +1,5 @@
 // 対局AI: レベルに応じた手の選び方と、戦法ごとの駒組み
-import { Position, SENTE, typeOf, colorOf, moveToUsi, usiToMove, sameMove } from './shogi.js';
+import { Position, SENTE, typeOf, colorOf, moveToUsi, usiToMove, sameMove, sq } from './shogi.js';
 import { bookMoves, bookReady, shapeMoves, shapeReady } from './book.js';
 
 // レベルごとの設定
@@ -61,11 +61,12 @@ const BOOK_TAGS = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokof
 
 const PLAN_MAX_PLY = 40; // これより後は駒組みを続けない
 const PLAN_TOL = 70; // 囲いの手を指すときに許す損（レベルによらず小さく）
+const DEFEND_TOL = 200; // 飛車先を受ける手に許す損
 const PLAN_TOL_ATTACK = 150; // 飛車を振るなど戦法を決める手に許す損（エンジンは振り飛車を低く見るため）
 const OPEN_END = 24; // ここまでは序盤として、全レベルで深く読み、損の小さい手だけを指す
 const MID_END = 40; // ここにかけてレベル本来の読みの量と許す損に戻す
 const OPEN_NODES = 150000; // 序盤の読みの量
-const OPEN_TOL = 40; // 序盤に許す損
+const OPEN_TOL = 25; // 序盤に許す損（大きいと７七桂のような筋の悪い手が混じる）
 
 function mirrorUsi(u) {
   const f = (c) => String(10 - Number(c));
@@ -78,6 +79,37 @@ export function value(l) {
   if (!l) return -99999;
   if (l.mate != null) return l.mate > 0 ? 30000 - l.mate : -30000 - l.mate;
   return l.cp || 0;
+}
+
+
+// 飛車先の歩の交換を受けていないか。相手の飛車がいる筋で、相手の歩が５段目まで来ていて、
+// 次の歩突きで自分の歩が取られたあと、相手の飛車が出てくるマスにも、自分の歩の後ろのマスにも利きがなければ true
+// （人は２五歩・８五歩と来たら３三角・３二金・７七角・７八金などで必ず受ける。エンジンは浅い読みだと受けずに駒組みを優先するため）
+export function rookFileOpen(pos, me) {
+  const opp = 1 - me;
+  for (let file = 1; file <= 9; file++) {
+    let oppRook = false;
+    for (let rank = 1; rank <= 9; rank++) {
+      const pc = pos.board[sq(file, rank)];
+      if (pc && colorOf(pc) === opp && typeOf(pc) === 'R') oppRook = true;
+    }
+    if (!oppRook) continue;
+    const oppPawnSq = sq(file, 5);
+    const op = pos.board[oppPawnSq];
+    if (!(op && colorOf(op) === opp && typeOf(op) === 'P')) continue;
+    const myPawnRank = me === SENTE ? 7 : 3;
+    const landRank = me === SENTE ? 6 : 4;
+    const mySq = sq(file, myPawnRank);
+    const mp = pos.board[mySq];
+    if (!(mp && colorOf(mp) === me && typeOf(mp) === 'P')) continue;
+    if (pos.board[sq(file, landRank)]) continue;
+    // 自分の歩が交換でいなくなったとして利きを調べる
+    const q = pos.clone();
+    q.board[mySq] = null;
+    if (q.attacked(sq(file, landRank), me) || q.attacked(mySq, me)) continue;
+    return true;
+  }
+  return false;
 }
 
 export class AiPlayer {
@@ -277,11 +309,31 @@ export class AiPlayer {
     if (!lines.length) return { move: usiToMove(res.bestmove) };
     const bestV = Math.max(...lines.map(value));
 
-    // 形の定跡（棒銀と囲いを指定したときは、駒組み手順を先に試す）
     const legal = pos.legalMoves();
+    const me = pos.turn;
+    // 指したあとに飛車先が受かっていない手か
+    const leavesOpen = (mv) => { const q = pos.clone(); q.applyMove(mv); return rookFileOpen(q, me); };
+
+    // 飛車先の歩の交換を受ける（序盤のみ）
+    if (pos.ply <= MID_END && rookFileOpen(pos, me)) {
+      const defs = legal.filter((mv) => mv.from != null && !pos.board[mv.to] && typeOf(pos.board[mv.from]) !== 'K' && !leavesOpen(mv));
+      // 読みの候補にある手を先に、なければ角・金・銀の手を
+      const inLines = defs.filter((mv) => lines.some((l) => l.pv[0] === moveToUsi(mv)));
+      const order = { B: 0, G: 1, S: 2 };
+      const others = defs.filter((mv) => !inLines.includes(mv)).sort((a, b) => (order[typeOf(pos.board[a.from])] ?? 9) - (order[typeOf(pos.board[b.from])] ?? 9));
+      let pick = null, pickLoss = Infinity;
+      for (const mv of [...inLines, ...others].slice(0, 5)) {
+        const loss = await this.lossOf(pos, mv, lines, bestV);
+        if (loss == null) return null;
+        if (loss < pickLoss) { pick = mv; pickLoss = loss; }
+      }
+      if (pick && pickLoss <= DEFEND_TOL) return { move: pick, defend: true };
+    }
+
+    // 形の定跡（棒銀と囲いを指定したときは、駒組み手順を先に試す）
     const shapeFirst = this.strategyKey !== 'bougin' && !this.castleChosen;
     const tryShape = async () => {
-      const cs = this.shapeCands(pos, legal).slice(0, 2);
+      const cs = this.shapeCands(pos, legal).filter((mv) => !leavesOpen(mv)).slice(0, 2);
       for (const mv of cs) {
         const loss = await this.lossOf(pos, mv, lines, bestV);
         if (loss == null) return null;
@@ -298,7 +350,7 @@ export class AiPlayer {
 
     // 戦法の駒組み（自然な手のときだけ。損が大きい手は指さない）
     const planMv = this.nextPlanMove(pos);
-    if (planMv) {
+    if (planMv && !leavesOpen(planMv)) {
       const u = moveToUsi(planMv);
       let pv = null;
       const hit = lines.find((l) => l.pv[0] === u);
@@ -327,7 +379,12 @@ export class AiPlayer {
     }
 
     // レベルに応じて、損が許容範囲の手から選ぶ（良い手ほど選ばれやすい）
-    const ok = lines.filter((l) => bestV - value(l) <= tol);
+    let ok = lines.filter((l) => bestV - value(l) <= tol);
+    // 序盤は飛車先を受けないままにする手を避ける
+    if (pos.ply <= MID_END) {
+      const ok2 = ok.filter((l) => { try { return !leavesOpen(usiToMove(l.pv[0])); } catch { return true; } });
+      if (ok2.length) ok = ok2;
+    }
     // 自分が詰ませられる局面や、詰まされる手は許容しない
     const safe = ok.filter((l) => !(l.mate != null && l.mate < 0) || value(l) === bestV);
     const pool = safe.length ? safe : [lines.find((l) => value(l) === bestV)];

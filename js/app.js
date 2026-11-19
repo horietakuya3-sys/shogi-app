@@ -706,7 +706,7 @@ async function nextTurn() {
   if (res.resign) { endPlay('投了', 1 - side); return; }
   if (res.win) { endPlay('入玉勝ち', side); return; }
   if (!curPos().isLegal(res.move)) { endPlay('中断', null); return; }
-  p.lastSrc = res.book ? '定跡' : res.shape ? '定跡の形' : res.plan ? '駒組み' : '読み';
+  p.lastSrc = res.book ? '定跡' : res.shape ? '定跡の形' : res.defend ? '飛車先の受け' : res.plan ? '駒組み' : '読み';
   playTurnMove(res.move);
   renderPlayInfo();
 }
