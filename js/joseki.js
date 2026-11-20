@@ -4,6 +4,7 @@
 import { Position, moveToUsi } from './shogi.js';
 import { hashKey, shapeKey, rotSq } from './book.js';
 import { SN_LINES } from './joseki_sn.js';
+import { SJ_LINES } from './joseki_sj.js';
 
 export const LINES = [
   // 相矢倉（24手組）
@@ -81,9 +82,9 @@ export const LINES = [
   // 急戦矢倉（後手の端角・△８四飛）
   { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 7i6h 1c1d 1g1f 8d8e 6h7g 2b1c 3i4h 8b8d 6i7h 7a6b 5i6i 6a7a 4i5h 9c9d 9g9f 4a3b 8h7i' },
   // 先手右四間飛車 対 後手矢倉
-  { s: 'ibisha', g: 'yagura', moves: '7g7f 8c8d 7i6h 3c3d 6g6f 7a6b 5g5f 5c5d 2h4h 3a4b 3i3h 4a3b 4g4f 5a4a 3h4g 6a5b 6i7h 4b3c 5i6i' },
+  { s: 'migishiken', g: 'yagura', moves: '7g7f 8c8d 7i6h 3c3d 6g6f 7a6b 5g5f 5c5d 2h4h 3a4b 3i3h 4a3b 4g4f 5a4a 3h4g 6a5b 6i7h 4b3c 5i6i' },
   // 後手右四間飛車（エルモ囲い）対 先手石田流
-  { s: 'sangen', g: 'ibisha', moves: '7g7f 3c3d 7f7e 6c6d 2h7h 8b6b 5i4h 5a4b 4h3h 4b3b 3h2h 3a4b 3i3h 4a3a 6i5h 6a5b 9g9f' },
+  { s: 'sangen', g: 'migishiken', moves: '7g7f 3c3d 7f7e 6c6d 2h7h 8b6b 5i4h 5a4b 4h3h 4b3b 3h2h 3a4b 3i3h 4a3a 6i5h 6a5b 9g9f' },
   // 後手一手損角換わり
   { s: 'kakugawari', g: 'kakugawari', moves: '7g7f 3c3d 2g2f 2b8h+ 7i8h 3a2b 6i7h 2b3c 3i4h 7a6b 4g4f 6c6d 4h4g 6b6c 3g3f 4a3b 2i3g 5a4b' },
   // 対四間飛車の急戦：棒銀
@@ -95,11 +96,11 @@ export const LINES = [
   // 対四間飛車の急戦：▲４五歩早仕掛け
   { s: 'ibisha', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 2f2e 2b3c 5i6h 8b4b 6h7h 5a6b 4i5h 6b7b 5g5f 7b8b 7i6h 7a7b 6h5g 6a5b 3g3f 9c9d 2i3g 1c1d 4g4f' },
   // 対四間飛車の急戦：エルモ囲い（玉７八・金７九・銀６八）
-  { s: 'ibisha', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 2f2e 2b3c 5i6h 8b4b 6h7h 5a6b 4i5h 6b7b 7i6h 7b8b 6i7i 7a7b 5g5f 6a5b 3i4h 9c9d' },
+  { s: 'elmo', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 2f2e 2b3c 5i6h 8b4b 6h7h 5a6b 4i5h 6b7b 7i6h 7b8b 6i7i 7a7b 5g5f 6a5b 3i4h 9c9d' },
   // 先手居飛車穴熊 対 後手四間飛車（▲４八銀・▲５七銀から）
   { s: 'ibisha', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 3i4h 8b4b 5i6h 5a6b 2f2e 2b3c 6h7h 7a7b 5g5f 3a3b 4i5h 6b7a 4h5g 6a5b 8h7g 9c9d 7h8h 6c6d 9i9h 7c7d 8h9i 8a7c' },
   // 先手ミレニアム 対 後手四間飛車（玉８九・桂７七・金７八・銀７九）
-  { s: 'ibisha', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 3i4h 8b4b 5i6h 5a6b 2f2e 2b3c 6h7h 7a7b 5g5f 3a3b 4i5h 6b7a 4h5g 6a5b 7i6h 9c9d 7h7i 6c6d 8i7g 7c7d 7i8i 1c1d 6i7h 8a7c 6h7i' },
+  { s: 'millennium', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 3i4h 8b4b 5i6h 5a6b 2f2e 2b3c 6h7h 7a7b 5g5f 3a3b 4i5h 6b7a 4h5g 6a5b 7i6h 9c9d 7h7i 6c6d 8i7g 7c7d 7i8i 1c1d 6i7h 8a7c 6h7i' },
   // 先手角交換四間飛車 対 後手居飛車
   { s: 'shiken', g: 'ibisha', moves: '7g7f 8c8d 2h6h 8d8e 8h7g 7a6b 5i4h 3c3d 7g2b+ 3a2b 7i8h 5a4b 8h7g 4b3b 4h3h 6a5b 3h2h 6c6d 6g6f 6b6c' },
   // 後手ダイレクト向かい飛車 対 先手居飛車
@@ -109,10 +110,11 @@ export const LINES = [
 ];
 
 // 居飛車・定跡まかせを選んだときに使える戦法
-const IBISHA_FAMILY = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin'];
+const IBISHA_FAMILY = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium'];
 export function fitsStrategy(tag, strategy) {
   if (strategy === 'none' || strategy === 'auto') return true;
   if (strategy === 'ibisha') return IBISHA_FAMILY.includes(tag);
+  if (strategy === 'shiken') return tag === 'shiken' || tag === 'fujii'; // 藤井システムも四間飛車
   if (strategy === 'bougin') return tag === 'bougin' || tag === 'kakugawari';
   return tag === strategy;
 }
@@ -123,7 +125,7 @@ let shapes = null; // 自分の駒の形 → Map(usi → 指す側の戦法の�
 function build() {
   tree = new Map();
   shapes = new Map();
-  for (const line of [...LINES, ...SN_LINES]) {
+  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES]) {
     const pos = new Position();
     for (const u of line.moves.split(' ')) {
       const mv = pos.legalMoves().find((m) => moveToUsi(m) === u);

@@ -36,8 +36,12 @@ export const STRATEGIES = {
   sangen: { name: '三間飛車', ranged: true, attack: ['7g7f', '6g6f', '2h7h'], castle: 'mino' },
   naka: { name: '中飛車', ranged: true, attack: ['5g5f', '2h5h', '7g7f'], castle: 'mino' },
   mukai: { name: '向かい飛車', ranged: true, attack: ['7g7f', '6g6f', '8h7g', '2h8h'], castle: 'mino' },
+  migishiken: { name: '右四間飛車', attack: ['7g7f', '4g4f', '2h4h', '3i3h', '3h4g'], castle: 'elmo' },
+  elmo: { name: 'エルモ急戦（対振り飛車）', attack: ['7g7f', '2g2f', '2f2e', '3i4h'], castle: 'elmo' },
+  millennium: { name: 'ミレニアム（対振り飛車）', attack: ['7g7f', '2g2f', '2f2e', '3i4h', '4h5g'], castle: 'millennium' },
+  fujii: { name: '藤井システム', ranged: true, attack: ['7g7f', '6g6f', '2h6h', '1g1f', '8h7g'], castle: 'mino' },
 };
-export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'shiken', 'sangen', 'naka', 'mukai', 'none'];
+export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai', 'none'];
 
 // 囲い。side: 'right' は振り飛車用（玉を右へ）、'left' は居飛車用（玉を左へ）。hidden は選択肢に出さない内部用
 export const CASTLES = {
@@ -48,6 +52,8 @@ export const CASTLES = {
   ianaguma: { name: '居飛車穴熊', side: 'left', drop: ['6i7h'], moves: ['7g7f', '8h7g', '9i9h', '5i6h', '6h7h', '7h8h', '8h9i', '7i8h', '6i7i', '4i5h'] },
   yagura: { name: '矢倉囲い', side: 'left', moves: ['7i6h', '6g6f', '5g5f', '3i4h', '4i5h', '6i7h', '5i6i', '5h6g', '6h7g', '8h7i', '7i4f', '6i7i', '7i8h'] },
   gangi: { name: '雁木囲い', side: 'left', moves: ['6g6f', '7i6h', '5g5f', '3i4h', '6h6g', '4h5g', '6i7h', '4i5h', '5i6i'] },
+  elmo: { name: 'エルモ囲い', side: 'left', moves: ['5i6h', '6h7h', '7i6h', '6i7i', '4i5h'] },
+  millennium: { name: 'ミレニアム', side: 'left', moves: ['5i6h', '6h7h', '7i6h', '7h7i', '8i7g', '7i8i', '6i7h', '6h7i', '4i5h'] },
   simple: { name: '居飛車の簡易な囲い', side: 'left', hidden: true, moves: ['6i7h', '3i4h', '5i6h', '4i5h', '9g9f'] },
   kaku: { name: '角換わりの囲い', side: 'left', hidden: true, moves: ['3i3h', '4g4f', '3h4g', '5i6h', '6h7h'] },
   naka: { name: '中住まい', side: 'left', hidden: true, moves: ['3i3h', '7g7f', '5i5h'] },

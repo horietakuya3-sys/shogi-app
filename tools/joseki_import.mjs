@@ -25,5 +25,5 @@ for (const f of process.argv.slice(2)) {
     out.push({ s, g, note, moves: usis.join(' ') });
   }
 }
-fs.writeFileSync('/home/claude/sn/lines.json', JSON.stringify(out, null, 1));
+fs.writeFileSync(process.env.OUT || '/home/claude/sn/lines.json', JSON.stringify(out, null, 1));
 console.error('lines', out.length);
