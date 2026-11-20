@@ -1,6 +1,7 @@
 // 対局AI: レベルに応じた手の選び方と、戦法ごとの駒組み
 import { Position, SENTE, typeOf, colorOf, moveToUsi, usiToMove, sameMove } from './shogi.js';
-import { bookMoves, bookReady, shapeMoves, shapeReady } from './book.js';
+import { bookMoves, bookReady } from './book.js';
+import { josekiMoves, josekiShapeMoves } from './joseki.js';
 
 // レベルごとの設定
 // nodes: 探索量 / mpv: 比べる候補の数 / tol: 許す評価値の損（これ以内の手からランダムに選ぶ）
@@ -60,8 +61,9 @@ export const castleFits = (strategyKey, castleKey) => {
 const BOOK_TAGS = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'shiken', 'sangen', 'naka', 'mukai'];
 
 const PLAN_MAX_PLY = 40; // これより後は駒組みを続けない
-const PLAN_TOL = 70; // 囲いの手を指すときに許す損（レベルによらず小さく）
-const PLAN_TOL_ATTACK = 150; // 飛車を振るなど戦法を決める手に許す損（エンジンは振り飛車を低く見るため）
+const PLAN_TOL = 30; // 駒組みの手・コンピュータの定跡の手を指すときに許す損（レベルによらず小さく）
+const SHAPE_TOL = 60; // 人の定跡の形の手に許す損（エンジンは人の定跡の手を少し低く見るため、駒組みより少し広く）
+const PLAN_TOL_ATTACK = 150; // 飛車を振る手に許す損（エンジンは振り飛車を低く見るため）
 const OPEN_END = 24; // ここまでは序盤として、全レベルで深く読み、損の小さい手だけを指す
 const MID_END = 40; // ここにかけてレベル本来の読みの量と許す損に戻す
 const OPEN_NODES = 150000; // 序盤の読みの量
@@ -110,7 +112,7 @@ export class AiPlayer {
       return null;
     });
     // 飛車まわりの手（戦法を決める手）は、囲いの手より少し大きな損まで許す
-    this.planAttack = this.plan.map((u) => (st.attack || []).includes(u));
+    this.planAttack = this.plan.map((u, i) => (st.attack || []).includes(u) && this.planPiece[i] === 'R');
     this.planIdx = 0;
     this.planFails = 0; // 飛ばした手順の数
     this.stepFails = 0; // 今の手順を見送った回数
@@ -135,7 +137,7 @@ export class AiPlayer {
     if (!ms || !ms.length) return null;
     const me = pos.turn;
     const best = Math.max(...ms.map((m) => m.ev));
-    const width = this.level >= 10 ? 30 : 50; // 定跡でも評価の低い手（序盤の５二金右など）は選ばない
+    const width = 20; // 定跡でも評価の低い手（序盤の５二金右など）は選ばない
     let cands = ms.filter((m) => m.ev >= best - width);
     // 振り飛車は、定跡の戦法の印に居飛車のような手も混じるので、飛車を振るまでは定跡を使わない
     if (STRATEGIES[this.strategyKey].ranged && !this.rookSwung(pos)) return null;
@@ -155,22 +157,21 @@ export class AiPlayer {
 
   // 形の定跡の候補（自分の駒の配置が定跡に出てきた形と同じなら、そこで指された駒組みの手）。重みの大きい順
   shapeCands(pos, legal) {
-    if (!shapeReady() || pos.ply > PLAN_MAX_PLY) return [];
-    const st = this.strategyKey;
-    // 振り飛車は、飛車を振るまでは駒組み手順で指す（形の定跡の印では居飛車の手が混じるため）
-    if (STRATEGIES[st].ranged && !this.rookSwung(pos)) return [];
-    const ms = shapeMoves(pos);
-    if (!ms) return [];
-    const fam = st === 'bougin' ? ['ibisha', 'kakugawari', 'aigakari'] : BOOK_TAGS.includes(st) ? [st] : null;
+    if (pos.ply > PLAN_MAX_PLY) return [];
     const out = [];
-    for (const m of ms) {
-      if (fam && !fam.some((t) => m.tags.has(t))) continue;
-      const mv = legal.find((x) => moveToUsi(x) === m.usi);
-      if (!mv || mv.from == null || pos.board[mv.to]) continue; // 駒を取る手・打つ手は除く
-      out.push({ mv, w: m.n * Math.exp(m.ev / 40) });
+    for (const u of josekiShapeMoves(pos, this.strategyKey)) {
+      const mv = legal.find((x) => moveToUsi(x) === u);
+      if (mv && !pos.board[mv.to]) out.push(mv);
     }
-    // 重みに応じてランダムに並べる（毎回同じ形にならないように）
-    return out.map((x) => ({ ...x, r: Math.random() ** (1 / x.w) })).sort((a, b) => b.r - a.r).map((x) => x.mv);
+    return out.sort(() => Math.random() - 0.5);
+  }
+
+  // 人の定跡の手（js/joseki.js）。レベルによらず指す
+  josekiMove(pos) {
+    if (this.castleChosen && pos.ply > 12) return null; // 囲いを指定したときは、途中から囲いの手順を優先
+    const legal = pos.legalMoves();
+    const ms = josekiMoves(pos, this.strategyKey).map((u) => legal.find((x) => moveToUsi(x) === u)).filter(Boolean);
+    return ms.length ? ms[Math.floor(Math.random() * ms.length)] : null;
   }
 
   // 候補の手が、最善と比べて tol 以内の損か（読み直しが必要なら1回だけ読む）。null は中断
@@ -263,9 +264,9 @@ export class AiPlayer {
 
   // 戻り値: { move, resign, info } / 中断されたら null
   async think(pos, clock) {
-    // まず定跡
-    const bm = this.bookMove(pos);
-    if (bm) return { move: bm, book: true };
+    // まず人の定跡
+    const jm = this.josekiMove(pos);
+    if (jm) return { move: jm, joseki: true };
     const sfen = pos.toSfen();
     const tol = this.tolAt(pos.ply);
     const mpv = Math.max(this.cfg.mpv, pos.ply <= MID_END ? 4 : 1);
@@ -277,7 +278,7 @@ export class AiPlayer {
     if (!lines.length) return { move: usiToMove(res.bestmove) };
     const bestV = Math.max(...lines.map(value));
 
-    // 形の定跡（棒銀と囲いを指定したときは、駒組み手順を先に試す）
+    // 定跡の形（人の定跡の手順に出てくる自分の駒の形なら、その手順の手）。棒銀と囲いを指定したときは、駒組み手順を先に試す
     const legal = pos.legalMoves();
     const shapeFirst = this.strategyKey !== 'bougin' && !this.castleChosen;
     const tryShape = async () => {
@@ -286,7 +287,7 @@ export class AiPlayer {
         const loss = await this.lossOf(pos, mv, lines, bestV);
         if (loss == null) return null;
         const isRook = typeOf(pos.board[mv.from]) === 'R';
-        if (loss <= (isRook && STRATEGIES[this.strategyKey].ranged ? PLAN_TOL_ATTACK : PLAN_TOL)) return { move: mv, shape: true };
+        if (loss <= (isRook && STRATEGIES[this.strategyKey].ranged ? PLAN_TOL_ATTACK : SHAPE_TOL)) return { move: mv, shape: true };
       }
       return false;
     };
@@ -294,6 +295,14 @@ export class AiPlayer {
       const r = await tryShape();
       if (r === null) return null;
       if (r) return r;
+    }
+
+    // コンピュータの定跡（最善との差が小さい手だけ）
+    const bm = this.bookMove(pos);
+    if (bm) {
+      const loss = await this.lossOf(pos, bm, lines, bestV);
+      if (loss == null) return null;
+      if (loss <= PLAN_TOL) return { move: bm, book: true };
     }
 
     // 戦法の駒組み（自然な手のときだけ。損が大きい手は指さない）

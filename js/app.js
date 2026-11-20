@@ -5,7 +5,7 @@ import {
 import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
-import { loadBook, bookReady, loadShape, shapeReady } from './book.js';
+import { loadBook, bookReady } from './book.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
@@ -491,12 +491,55 @@ function setupPlaySheet() {
       for (const o of ca.options) o.disabled = o.value !== 'auto' && !castleFits(st.value, o.value);
       if (ca.selectedOptions[0] && ca.selectedOptions[0].disabled) ca.value = 'auto';
     };
-    ty.onchange = sync;
+    ty.onchange = () => { sync(); markTurnPick(); };
     st.onchange = sync;
     sync();
   });
   $('selMain').value = String(cfg.main);
   $('selByo').value = String(cfg.byo);
+  $('furiResult').textContent = '';
+  markTurnPick();
+  document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => {
+    b.onclick = () => {
+      let side = b.dataset.turn;
+      if (side === 'furi') {
+        // 振り駒: 歩を5枚振って、歩が多ければ先手
+        const fu = Array.from({ length: 5 }, () => Math.random() < 0.5).filter(Boolean).length;
+        side = fu >= 3 ? 0 : 1;
+        $('furiResult').textContent = `振り駒の結果：歩が${fu}枚、と金が${5 - fu}枚で、あなたは${side === 0 ? '先手' : '後手'}`;
+      } else {
+        side = Number(side);
+        $('furiResult').textContent = '';
+      }
+      setHumanSide(side);
+    };
+  });
+}
+
+// 人の手番を side にし、反対側をAIにする。AIの設定（レベル・戦法・囲い）は今AIになっている側から引き継ぐ
+function setHumanSide(side) {
+  const rows = [...document.querySelectorAll('.side-cfg')].sort((a, b) => a.dataset.side - b.dataset.side);
+  const read = (r) => ({ type: r.querySelector('.p-type').value, level: r.querySelector('.p-level').value, strategy: r.querySelector('.p-strategy').value, castle: r.querySelector('.p-castle').value });
+  const cur = rows.map(read);
+  const aiCfg = cur[1 - side].type === 'ai' ? cur[1 - side] : cur[side].type === 'ai' ? cur[side] : cur[1 - side];
+  const write = (r, v, type) => {
+    r.querySelector('.p-type').value = type;
+    r.querySelector('.p-level').value = v.level;
+    r.querySelector('.p-strategy').value = v.strategy;
+    r.querySelector('.p-strategy').onchange();
+    r.querySelector('.p-castle').value = v.castle;
+    r.querySelector('.p-type').onchange();
+  };
+  write(rows[1 - side], aiCfg, 'ai');
+  write(rows[side], cur[side], 'human');
+  markTurnPick();
+}
+
+// 先手・後手のボタンを、今の設定に合わせて光らせる
+function markTurnPick() {
+  const types = [...document.querySelectorAll('.side-cfg')].sort((a, b) => a.dataset.side - b.dataset.side).map((r) => r.querySelector('.p-type').value);
+  const human = types[0] === 'human' && types[1] === 'ai' ? 0 : types[1] === 'human' && types[0] === 'ai' ? 1 : null;
+  document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => b.classList.toggle('on', b.dataset.turn === String(human)));
 }
 
 function readPlaySheet() {
@@ -515,9 +558,9 @@ function readPlaySheet() {
 }
 
 async function startPlay(cfg, fromHere) {
-  if (cfg.players.some((p) => p.type === 'ai') && (!bookReady() || !shapeReady())) {
+  if (cfg.players.some((p) => p.type === 'ai') && !bookReady()) {
     toast('定跡を読み込んでいます…', 10000);
-    try { await Promise.race([Promise.all([loadBook(), loadShape()]), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))]); toast('定跡を読み込みました', 1500); }
+    try { await Promise.race([loadBook(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 20000))]); toast('定跡を読み込みました', 1500); }
     catch { toast('定跡を読み込めなかったので、定跡なしで始めます', 3000); }
   }
   if (!state.engineReady && cfg.players.some((p) => p.type === 'ai')) {
@@ -706,7 +749,7 @@ async function nextTurn() {
   if (res.resign) { endPlay('投了', 1 - side); return; }
   if (res.win) { endPlay('入玉勝ち', side); return; }
   if (!curPos().isLegal(res.move)) { endPlay('中断', null); return; }
-  p.lastSrc = res.book ? '定跡' : res.shape ? '定跡の形' : res.plan ? '駒組み' : '読み';
+  p.lastSrc = res.joseki ? '定跡' : res.shape ? '定跡の形' : res.book ? 'コンピュータの定跡' : res.plan ? '駒組み' : '読み';
   playTurnMove(res.move);
   renderPlayInfo();
 }
@@ -1707,8 +1750,8 @@ function bindUi() {
   $('btnEngine').classList.toggle('on', state.analyze);
   const menu = $('menuSheet');
   $('btnMenu').onclick = () => {
-    if (state.mode === 'play') { toast('対局中はメニューを使えません。終えるときは中断を押してください'); return; }
-    if (state.mode === 'practice') { toast('復習中です。終えるときは終了を押してください'); return; }
+    // 対局中・問題を解いている間は、止めずに変えられる設定だけを出す
+    menu.classList.toggle('limited', state.mode === 'play' || state.mode === 'practice');
     menu.classList.remove('hidden');
   };
   menu.addEventListener('click', async (e) => {
@@ -1958,7 +2001,6 @@ async function main() {
     state.engineReady = true;
     requestAnalysis();
     loadBook().catch(() => { /* 対局を始めるときにもう一度読む */ });
-    loadShape().catch(() => { /* 同上 */ });
   } catch (e) {
     let msg = e.message === 'crossOriginIsolated'
       ? 'エンジンの準備中です。表示が変わらなければページを再読み込みしてください'
