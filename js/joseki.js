@@ -124,6 +124,40 @@ export function fitsStrategy(tag, strategy) {
   return tag === strategy;
 }
 
+// 細かい戦法：大きな戦法（base）の手順のうち、名前（note）で見分けられるもの。side を書いたものはその手番だけ
+export const SUB_RULES = [
+  { key: 'gokigen', base: 'naka', re: /ゴキゲン/, name: 'ゴキゲン中飛車' },
+  { key: 'tsunogin', base: 'naka', re: /ツノ銀/, name: 'ツノ銀中飛車' },
+  { key: 'chosoku', base: 'ibisha', re: /超速/, name: '超速（対ゴキゲン中飛車）' },
+  { key: 'taigokigen', base: 'ibisha', re: /ゴキゲン/, name: '対ゴキゲン中飛車（超急戦・丸山ワクチン・穴熊など）' },
+  { key: 'ibianaguma', base: 'ibisha', re: /居飛車穴熊|相穴熊|対穴熊/, name: '居飛車穴熊（対振り飛車）' },
+  { key: 'migigyoku', base: ['ibisha', 'kakugawari'], re: /右玉/, name: '右玉' },
+  { key: 'koshikake', base: 'kakugawari', re: /腰掛け銀/, name: '角換わり腰掛け銀' },
+  { key: 'hayakuri', base: ['kakugawari', 'aigakari', 'ibisha'], re: /早繰り銀/, name: '早繰り銀' },
+  { key: 'ichitezon', base: 'kakugawari', re: /一手損/, side: 1, name: '一手損角換わり' },
+  { key: 'aono', base: 'yokofu', re: /青野/, side: 0, name: '横歩取り青野流' },
+  { key: 'waki', base: 'yagura', re: /脇システム/, name: '矢倉・脇システム' },
+  { key: 'kakushiken', base: 'shiken', re: /角交換四間/, name: '角交換四間飛車' },
+  { key: 'tateishi', base: 'shiken', re: /立石/, name: '立石流' },
+  { key: 'furiana', base: ['shiken', 'sangen', 'naka', 'mukai'], re: /(四間飛車|三間飛車|中飛車左)穴熊/, name: '振り飛車穴熊' },
+  { key: 'furimille', base: 'shiken', re: /振り飛車ミレニアム/, name: '振り飛車ミレニアム' },
+  { key: 'ishida', base: 'sangen', re: /石田|升田|真部/, name: '石田流（升田式・真部流など）' },
+  { key: 'kakumukai', base: 'mukai', re: /角交換向かい|ダイレクト/, name: '角交換・ダイレクト向かい飛車' },
+  { key: 'aifuri', base: ['shiken', 'sangen', 'naka', 'mukai'], re: /相振り|相中飛車|相三間/, name: '相振り飛車' },
+  { key: 'ureshino', base: 'kishu', re: /嬉野/, name: '嬉野流' },
+];
+
+// 手順の、手番 side の戦法の印（大きな戦法＋当てはまる細かい戦法）
+export function lineTags(line, side) {
+  const t = side === 0 ? line.s : line.g;
+  const out = [t];
+  for (const r of SUB_RULES) {
+    const bases = Array.isArray(r.base) ? r.base : [r.base];
+    if (bases.includes(t) && r.re.test(line.note || '') && (r.side == null || r.side === side)) out.push(r.key);
+  }
+  return out;
+}
+
 let tree = null; // 局面 → Map(usi → [先手の戦法の集合, 後手の戦法の集合])
 let shapes = null; // 自分の駒の形 → Map(usi → 指す側の戦法の集合)
 
@@ -138,7 +172,8 @@ function build() {
       const k = hashKey(pos.toSfen(false));
       if (!tree.has(k)) tree.set(k, new Map());
       const e = tree.get(k).get(u) || [new Set(), new Set()];
-      e[0].add(line.s); e[1].add(line.g);
+      for (const t of lineTags(line, 0)) e[0].add(t);
+      for (const t of lineTags(line, 1)) e[1].add(t);
       tree.get(k).set(u, e);
       // 形は、駒を取る手・打つ手を除く（相手の駒に関係なく指せる駒組みの手だけ）
       if (mv.from != null && !pos.board[mv.to]) {
@@ -146,7 +181,7 @@ function build() {
         if (!shapes.has(sk)) shapes.set(sk, new Map());
         const nu = pos.turn === 0 ? u : rotSq(u); // 形は手番側が先手の向きでそろえる
         const se = shapes.get(sk).get(nu) || new Set();
-        se.add(pos.turn === 0 ? line.s : line.g);
+        for (const t of lineTags(line, pos.turn)) se.add(t);
         shapes.get(sk).set(nu, se);
       }
       pos.applyMove(mv);
@@ -177,8 +212,14 @@ const TAG_NAMES = {
   migishiken: '右四間飛車', elmo: 'エルモ急戦', millennium: 'ミレニアム', shiken: '四間飛車', fujii: '藤井システム', sangen: '三間飛車',
   naka: '中飛車', mukai: '向かい飛車', sujichigai: '筋違い角', kishu: '奇襲',
 };
+for (const r of SUB_RULES) TAG_NAMES[r.key] = r.name;
 export const tagName = (t) => TAG_NAMES[t] || t;
-export const STUDY_TAGS = Object.keys(TAG_NAMES);
+// 一覧の並び：大きな戦法のすぐ後に、その細かい戦法
+export const STUDY_TAGS = [];
+for (const t of ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai', 'sujichigai', 'kishu']) {
+  STUDY_TAGS.push(t);
+  for (const r of SUB_RULES) if ((Array.isArray(r.base) ? r.base[0] : r.base) === t) STUDY_TAGS.push(r.key);
+}
 
 // 勉強に使う手順の一覧。同じ手順や、ほかの手順の途中までしかない手順は除く
 // 手順の文字列から短い鍵を作る（定跡の勉強のポイント表 js/joseki_points.js で使う）

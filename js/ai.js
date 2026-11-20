@@ -1,7 +1,7 @@
 // 対局AI: レベルに応じた手の選び方と、戦法ごとの駒組み
 import { Position, SENTE, typeOf, colorOf, moveToUsi, usiToMove, sameMove } from './shogi.js';
 import { bookMoves, bookReady } from './book.js';
-import { josekiMoves, josekiShapeMoves } from './joseki.js';
+import { josekiMoves, josekiShapeMoves, SUB_RULES } from './joseki.js';
 
 // レベルごとの設定
 // nodes: 探索量 / mpv: 比べる候補の数 / tol: 許す評価値の損（これ以内の手からランダムに選ぶ）
@@ -42,7 +42,22 @@ export const STRATEGIES = {
   kishu: { name: '奇襲（鬼殺し・嬉野流・パックマンなど）', attack: ['7g7f', '2g2f'], castle: 'simple' },
   fujii: { name: '藤井システム', ranged: true, attack: ['7g7f', '6g6f', '2h6h', '1g1f', '8h7g'], castle: 'mino' },
 };
-export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai'];
+// 細かい戦法（joseki.js の SUB_RULES）。定跡は名前で見分けた手順を使い、外れたら大きな戦法の定跡に戻る。駒組みは大きな戦法と同じ
+const SUB_CASTLE = { chosoku: 'simple', taigokigen: 'simple', ibianaguma: 'ianaguma', furiana: 'fanaguma', migigyoku: 'kaku', koshikake: 'kaku', ichitezon: 'kaku' };
+{
+  const ordered = {};
+  for (const [k, v] of Object.entries(STRATEGIES)) {
+    ordered[k] = v;
+    for (const r of SUB_RULES) {
+      const b = Array.isArray(r.base) ? r.base[0] : r.base;
+      if (b !== k) continue;
+      ordered[r.key] = { ...v, name: r.name, base: b, castle: SUB_CASTLE[r.key] || v.castle };
+    }
+  }
+  for (const k of Object.keys(STRATEGIES)) delete STRATEGIES[k];
+  Object.assign(STRATEGIES, ordered);
+}
+export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai', 'gokigen', 'ishida', 'ibianaguma', 'furiana', 'kakushiken', 'koshikake'];
 
 // 囲い。side: 'right' は振り飛車用（玉を右へ）、'left' は居飛車用（玉を左へ）。hidden は選択肢に出さない内部用
 export const CASTLES = {
@@ -155,8 +170,9 @@ export class AiPlayer {
     // 振り飛車は、定跡の戦法の印に居飛車のような手も混じるので、飛車を振るまでは定跡を使わない
     if (STRATEGIES[this.strategyKey].ranged && !this.rookSwung(pos)) return null;
     {
-      if (!BOOK_TAGS.includes(this.strategyKey)) return null; // 棒銀など定跡で区別できない戦法は駒組み手順で指す
-      cands = cands.filter((m) => m.tags[me].has(this.strategyKey));
+      const bk = STRATEGIES[this.strategyKey].base || this.strategyKey;
+      if (!BOOK_TAGS.includes(bk)) return null; // 棒銀など定跡で区別できない戦法は駒組み手順で指す
+      cands = cands.filter((m) => m.tags[me].has(bk));
     }
     if (!cands.length) return null;
     const legal = pos.legalMoves();
@@ -182,7 +198,10 @@ export class AiPlayer {
   // 対振り飛車用の戦法（エルモ・ミレニアム）や右四間で、相手が振らずにその戦法の定跡がないときは、居飛車の定跡で指す
   fallbackMoves(fn, pos) {
     const ms = fn(pos, this.strategyKey);
-    if (ms.length || !['elmo', 'millennium', 'migishiken'].includes(this.strategyKey)) return ms;
+    if (ms.length) return ms;
+    const base = STRATEGIES[this.strategyKey].base;
+    if (base) return fn(pos, base); // 細かい戦法の手順を外れたら、大きな戦法の定跡で
+    if (!['elmo', 'millennium', 'migishiken'].includes(this.strategyKey)) return ms;
     return fn(pos, 'ibisha');
   }
 

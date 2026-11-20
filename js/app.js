@@ -6,7 +6,7 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
-import { studyLines, studyPoints, STUDY_TAGS, tagName, anyJosekiMoves } from './joseki.js';
+import { studyLines, studyPoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
@@ -499,7 +499,7 @@ function setupPlaySheet() {
     const ty = row.querySelector('.p-type');
     const ca = row.querySelector('.p-castle');
     lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}（R${AI_RATING[i + 1]}）</option>`).join('');
-    st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.name}${v.note ? '（相手次第）' : ''}</option>`).join('');
+    st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.base ? '　' : ''}${v.name}${v.note ? '（相手次第）' : ''}</option>`).join('');
     ca.innerHTML = Object.entries(CASTLES).filter(([, v]) => !v.hidden)
       .map(([k, v]) => `<option value="${k}">${k === 'auto' ? '囲い: ' : ''}${v.name}${v.side ? (v.side === 'right' ? '（振り飛車）' : '（居飛車）') : ''}</option>`).join('');
     ty.value = p.type;
@@ -664,28 +664,38 @@ function tickClock() {
     el.textContent = t.text;
     el.className = 'clock' + (t.moving ? ' active' : '') + (t.byo && t.moving ? ' byo' : '');
   }
-  // 時間の音（人の手番だけ）。持ち時間は1分ごと、秒読みは残り30秒で1回、10秒からは毎秒
+  // 時間の知らせ（人の手番だけ）。残り10分〜3分は1分ごと、2分30秒〜30秒は30秒ごと、20秒、10秒、あとは1秒ごと
+  // 読み上げがオンなら声で（「5分」「2分30秒」「20秒」「9」…）、オフなら音で知らせる
   const side = curPos().turn;
   if (p.players[side].type === 'human' && state.clockSound) {
     const b = p.beep;
-    if (b.side !== side) { b.side = side; b.marks = new Set(); }
     const mainLeft = c.main[side] - elapsedNow();
-    if (mainLeft > 0) {
-      const m = Math.ceil(mainLeft / 60000);
-      // 残りが10分を切ってから、1分ごとに鳴らす
-      if (b.lastMin[side] != null && m < b.lastMin[side] && m <= 10) beep(false);
-      b.lastMin[side] = m;
-    } else if (c.byoyomi) {
-      const left = Math.ceil((c.byoyomi + mainLeft) / 1000);
-      if (left <= 30 && left > 10 && !b.marks.has(30)) { b.marks.add(30); beep(false); }
-      if (left <= 10 && left >= 1 && !b.marks.has(left)) { b.marks.add(left); beep(left <= 3); }
+    const phase = mainLeft > 0 ? 'main' : c.byoyomi ? 'byo' : null;
+    const leftSec = phase === 'main' ? Math.ceil(mainLeft / 1000) : phase === 'byo' ? Math.ceil((c.byoyomi + mainLeft) / 1000) : 0;
+    const key = `${side}:${phase}`;
+    if (b.key !== key) { b.key = key; b.prev = null; }
+    if (phase && b.prev != null && leftSec < b.prev) {
+      const marks = phase === 'main' ? CLOCK_MARKS : CLOCK_MARKS.filter((m) => m < c.byoyomi / 1000);
+      const crossed = marks.filter((m) => m < b.prev && m >= leftSec);
+      if (crossed.length) clockCall(crossed[crossed.length - 1]);
     }
+    b.prev = phase ? leftSec : null;
   }
   // 時間切れ
   const over = elapsedNow() - c.main[side];
   if (over > 0 && (!c.byoyomi || over > c.byoyomi + 300)) {
     endPlay('切れ負け', 1 - side);
   }
+}
+
+const CLOCK_MARKS = [600, 540, 480, 420, 360, 300, 240, 180, 150, 120, 90, 60, 30, 20, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
+function clockCall(sec) {
+  if (state.speech && speechSupported()) {
+    const m = Math.floor(sec / 60), r = sec % 60;
+    const text = sec < 10 ? String(sec) : m ? `${m}分${r ? r + '秒' : ''}` : `${sec}秒`;
+    try { speak(text); return; } catch { /* 音にする */ }
+  }
+  beep(sec <= 3);
 }
 
 function canHumanMove() {
@@ -1589,8 +1599,9 @@ function openJosekiSheet() {
   const lines = studyLines();
   const sel = $('jsStrategy');
   if (!sel.options.length) {
-    sel.innerHTML = STUDY_TAGS.filter((t) => lines.some((l) => l.s === t || l.g === t))
-      .map((t) => `<option value="${t}">${tagName(t)}</option>`).join('');
+    const isSub = (t) => SUB_RULES.some((r) => r.key === t);
+    sel.innerHTML = STUDY_TAGS.filter((t) => lines.some((l) => lineTags(l, 0).includes(t) || lineTags(l, 1).includes(t)))
+      .map((t) => `<option value="${t}">${isSub(t) ? '　' : ''}${tagName(t)}</option>`).join('');
     sel.onchange = renderJosekiList;
     $('jsSide').onchange = renderJosekiList;
     $('btnJsClose').onclick = () => $('josekiSheet').classList.add('hidden');
@@ -1603,11 +1614,20 @@ function openJosekiSheet() {
 function renderJosekiList() {
   const tag = $('jsStrategy').value;
   const side = Number($('jsSide').value);
-  const lines = studyLines().filter((l) => (side === SENTE ? l.s : l.g) === tag);
+  // 選んだ手番の定跡を先に、その戦法がもう一方の手番にしかない定跡はそのあとに（その手番で出す）
+  const all = studyLines();
+  const mine = all.filter((l) => lineTags(l, side).includes(tag)).map((l) => [l, side]);
+  const other = all.filter((l) => !lineTags(l, side).includes(tag) && lineTags(l, 1 - side).includes(tag)).map((l) => [l, 1 - side]);
   const el = $('jsList');
   el.innerHTML = '';
-  if (!lines.length) { el.innerHTML = `<div class="pf-sub">${side === SENTE ? '先手' : '後手'}で${tagName(tag)}の定跡はまだありません。手番を変えてみてください</div>`; return; }
-  for (const l of lines) {
+  if (!mine.length && !other.length) { el.innerHTML = `<div class="pf-sub">${tagName(tag)}の定跡はまだありません</div>`; return; }
+  const head = (text) => { const d = document.createElement('div'); d.className = 'pf-sub js-head'; d.textContent = text; el.appendChild(d); };
+  let headDone = false;
+  for (const [l, sd] of [...mine, ...other]) {
+    if (sd !== side && !headDone) {
+      headDone = true;
+      head(mine.length ? `${side === SENTE ? '後手' : '先手'}で指す${tagName(tag)}` : `${side === SENTE ? '先手' : '後手'}で${tagName(tag)}の定跡はまだないので、${side === SENTE ? '後手' : '先手'}で指す定跡を出します`);
+    }
     const ms = l.moves.split(' ');
     // 最後の数手を見せて、ほかの手順と見分けられるようにする
     const p = new Position();
@@ -1621,9 +1641,9 @@ function renderJosekiList() {
     }
     const b = document.createElement('button');
     b.innerHTML = `<span></span><span class="js-sub"></span>`;
-    b.firstChild.textContent = `${l.title}（${ms.length}手・ポイント${studyPoints(l, side).length}問）`;
+    b.firstChild.textContent = `${sd === SENTE ? '☗' : '☖'}${l.title}（${ms.length}手・ポイント${studyPoints(l, sd).length}問）`;
     b.lastChild.textContent = `${tagName(l.s)} 対 ${tagName(l.g)}　…${ja.slice(-3).join(' ')}`;
-    b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, side); };
+    b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, sd); };
     el.appendChild(b);
   }
 }
