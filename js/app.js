@@ -1764,7 +1764,7 @@ async function josekiAnswer(mv) {
     $('btnPracticeNext').classList.add('hidden');
   }
   pr.first = false;
-  revealCandidates(pos, lines);
+  revealCandidates(pos, lines.slice(0, 3)); // 定跡の勉強では候補手は3つまで（ボタンが画面に収まるように）
 }
 
 function josekiRetry() {
@@ -1798,7 +1798,7 @@ async function josekiShow() {
   const res = pr.lines ? { lines: pr.lines } : await pr.judge;
   if (state.practice !== pr) return;
   const lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
-  revealCandidates(pos, lines);
+  revealCandidates(pos, lines.slice(0, 3));
 }
 
 function endPractice() {
@@ -2239,7 +2239,12 @@ function handleBack() {
     else el.classList.add('hidden');
     return true;
   }
-  if (state.mode === 'practice') { endPractice(); return true; }
+  if (state.mode === 'practice') {
+    const joseki = state.practice && state.practice.type === 'joseki';
+    endPractice();
+    if (joseki) openJosekiSheet(); // 定跡の勉強からは、戦法の一覧に戻る
+    return true;
+  }
   if (state.branch) { $('btnMainline').click(); return true; }
   if (state.mode === 'play') { toast('対局をやめるときは、中断か投了を押してください'); return true; }
   return false;
