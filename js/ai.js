@@ -24,7 +24,7 @@ export const LEVELS = [
 // ranged: 振り飛車か（囲いは玉を右側に寄せる）
 export const STRATEGIES = {
   auto: { name: 'ランダム（毎局変わる）' },
-  none: { name: '定跡まかせ（戦法を決めない）' },
+  nojoseki: { name: '定跡を使わない（読みだけで指す）' },
   ibisha: { name: '居飛車', attack: ['2g2f', '2f2e', '7g7f'], castle: 'simple' },
   yagura: { name: '矢倉', attack: ['7g7f', '6g6f', '2g2f'], castle: 'yagura' },
   gangi: { name: '雁木', attack: ['7g7f', '6g6f', '2g2f'], castle: 'gangi' },
@@ -42,7 +42,7 @@ export const STRATEGIES = {
   kishu: { name: '奇襲（鬼殺し・嬉野流・パックマンなど）', attack: ['7g7f', '2g2f'], castle: 'simple' },
   fujii: { name: '藤井システム', ranged: true, attack: ['7g7f', '6g6f', '2h6h', '1g1f', '8h7g'], castle: 'mino' },
 };
-export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai', 'none'];
+export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai'];
 
 // 囲い。side: 'right' は振り飛車用（玉を右へ）、'left' は居飛車用（玉を左へ）。hidden は選択肢に出さない内部用
 export const CASTLES = {
@@ -97,6 +97,7 @@ export class AiPlayer {
     this.engine = engine;
     this.level = level;
     this.cfg = LEVELS[level];
+    if (!STRATEGIES[strategy]) strategy = 'auto'; // 前の版で保存した「定跡まかせ」など
     let pool = RANDOM_POOL;
     if (castle !== 'auto') pool = pool.filter((k) => castleFits(k, castle));
     this.strategyKey = strategy === 'auto' ? pool[Math.floor(Math.random() * pool.length)] : strategy;
@@ -108,7 +109,7 @@ export class AiPlayer {
     const plan = (st.attack || []).filter((u) => !(cs && cs.drop && cs.drop.includes(u)));
     for (const u of (cs ? cs.moves : [])) if (!plan.includes(u)) plan.push(u);
     // 戦法を決めない場合でも、囲いを選んでいれば囲いだけ組む
-    this.plan = this.strategyKey === 'none' && !this.castleChosen ? [] : plan;
+    this.plan = this.strategyKey === 'nojoseki' && !this.castleChosen ? [] : plan;
     // 手順ごとに「どの駒を動かす手か」を、初形から手順だけを並べて求めておく（違う駒を動かさないため）
     const sim = new Position();
     this.planPiece = this.plan.map((u) => {
@@ -128,6 +129,8 @@ export class AiPlayer {
     this.stepFails = 0; // 今の手順を見送った回数
   }
 
+  get noJoseki() { return this.strategyKey === 'nojoseki'; }
+
   get castleName() { return this.castleKey ? CASTLES[this.castleKey].name : ''; }
 
   // 飛車を初めの位置から動かしたか
@@ -139,7 +142,7 @@ export class AiPlayer {
 
   // 定跡から選ぶ手（なければ null）
   bookMove(pos) {
-    if (!bookReady()) return null;
+    if (!bookReady() || this.noJoseki) return null;
     // 弱いレベルは序盤の早いうちだけ定跡を使う。囲いを指定したときは囲いを優先して、定跡は12手目まで
     const maxPly = this.castleChosen ? 12 : this.level <= 3 ? 10 : 99;
     if (pos.ply > maxPly) return null;
@@ -151,7 +154,7 @@ export class AiPlayer {
     let cands = ms.filter((m) => m.ev >= best - width);
     // 振り飛車は、定跡の戦法の印に居飛車のような手も混じるので、飛車を振るまでは定跡を使わない
     if (STRATEGIES[this.strategyKey].ranged && !this.rookSwung(pos)) return null;
-    if (this.strategyKey !== 'none') {
+    {
       if (!BOOK_TAGS.includes(this.strategyKey)) return null; // 棒銀など定跡で区別できない戦法は駒組み手順で指す
       cands = cands.filter((m) => m.tags[me].has(this.strategyKey));
     }
@@ -167,7 +170,7 @@ export class AiPlayer {
 
   // 形の定跡の候補（自分の駒の配置が定跡に出てきた形と同じなら、そこで指された駒組みの手）。重みの大きい順
   shapeCands(pos, legal) {
-    if (pos.ply > PLAN_MAX_PLY) return [];
+    if (pos.ply > PLAN_MAX_PLY || this.noJoseki) return [];
     const out = [];
     for (const u of this.fallbackMoves(josekiShapeMoves, pos)) {
       const mv = legal.find((x) => moveToUsi(x) === u);
@@ -185,6 +188,7 @@ export class AiPlayer {
 
   // 人の定跡の手（js/joseki.js）。レベルによらず指す
   josekiMove(pos) {
+    if (this.noJoseki) return null;
     if (this.castleChosen && pos.ply > 12) return null; // 囲いを指定したときは、途中から囲いの手順を優先
     const legal = pos.legalMoves();
     const ms = this.fallbackMoves(josekiMoves, pos).map((u) => legal.find((x) => moveToUsi(x) === u)).filter(Boolean);

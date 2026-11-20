@@ -6,7 +6,7 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
-import { studyLines, STUDY_TAGS, tagName, anyJosekiMoves } from './joseki.js';
+import { studyLines, studyPoints, STUDY_TAGS, tagName, anyJosekiMoves } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
@@ -1621,7 +1621,7 @@ function renderJosekiList() {
     }
     const b = document.createElement('button');
     b.innerHTML = `<span></span><span class="js-sub"></span>`;
-    b.firstChild.textContent = `${l.title}（${ms.length}手）`;
+    b.firstChild.textContent = `${l.title}（${ms.length}手・ポイント${studyPoints(l, side).length}問）`;
     b.lastChild.textContent = `${tagName(l.s)} 対 ${tagName(l.g)}　…${ja.slice(-3).join(' ')}`;
     b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, side); };
     el.appendChild(b);
@@ -1634,7 +1634,8 @@ function startJosekiStudy(l, side) {
   engine.stop();
   if (state.mode !== 'practice') state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
   state.mode = 'practice';
-  state.practice = { type: 'joseki', line: l, side, moves: l.moves.split(' '), k: -1, phase: 'ask', right: 0, asked: 0 };
+  const points = studyPoints(l, side);
+  state.practice = { type: 'joseki', line: l, side, moves: l.moves.split(' '), points, k: -1, phase: 'ask', right: 0, asked: 0 };
   $('practiceBar').classList.remove('hidden');
   josekiNext();
 }
@@ -1655,15 +1656,16 @@ function josekiPos(n) {
 
 function josekiHead() {
   const pr = state.practice;
-  return `定跡 ${pr.line.title}　${pr.k + 1}手目`;
+  const i = pr.points.indexOf(pr.k);
+  return `定跡 ${pr.line.title}　ポイント${i + 1}/${pr.points.length}（${pr.k + 1}手目）`;
 }
 
 function josekiNext() {
   const pr = state.practice;
-  let k = pr.k + 1;
-  while (k < pr.moves.length && k % 2 !== pr.side) k++;
-  if (k >= pr.moves.length) {
-    toast(`この定跡はここまでです（${pr.asked}問中 ${pr.right}問を1回で正解）`, 4000);
+  // ポイントの手だけを問題にし、あいだの手は進めておく
+  const k = pr.points.find((x) => x > pr.k);
+  if (k == null) {
+    toast(`この定跡はここまでです（ポイント${pr.asked}問中 ${pr.right}問を1回で正解）`, 4000);
     endPractice();
     return;
   }
@@ -1795,6 +1797,8 @@ function endPractice() {
   update();
 }
 
+function openPlaySheet() { setupPlaySheet(); $('playSheet').classList.remove('hidden'); }
+
 // ---- 操作 ----
 function onCellTap(idx) {
   if (!canHumanMove()) return;
@@ -1918,6 +1922,7 @@ function restore() {
 }
 
 function update() {
+  $('btnNewGame').classList.toggle('hidden', state.mode !== 'study');
   renderLabels();
   renderBoard();
   renderControls();
@@ -1934,7 +1939,7 @@ async function checkShared() {
   const p = new URLSearchParams(location.search);
   const kind = p.get('shared');
   if (!kind) return;
-  history.replaceState(null, '', location.pathname);
+  history.replaceState(history.state, '', location.pathname);
   try {
     const c = await caches.open('share');
     const key = kind === 'file' ? 'shared-file' : 'shared-text';
@@ -1954,6 +1959,7 @@ function bindUi() {
   $('btnNext').onclick = () => goTo(state.cursor + 1);
   $('btnLast').onclick = () => goTo(line().length);
   $('btnMainline').onclick = backToMainline;
+  $('btnNewGame').onclick = () => openPlaySheet();
   $('btnEngine').onclick = () => {
     state.analyze = !state.analyze;
     $('btnEngine').classList.toggle('on', state.analyze);
@@ -1973,7 +1979,7 @@ function bindUi() {
     const act = e.target.dataset && e.target.dataset.act;
     if (!act) return;
     menu.classList.add('hidden');
-    if (act === 'play') { setupPlaySheet(); $('playSheet').classList.remove('hidden'); }
+    if (act === 'play') openPlaySheet();
     if (act === 'review') startReview();
     if (act === 'profile') openProfile();
     if (act === 'practice') openPracticeMenu();
@@ -2195,6 +2201,30 @@ function checkEmbedded() {
   document.body.prepend(bar);
 }
 
+// ブラウザ（端末）の戻るボタン：ページを離れずに、開いているシートや問題を閉じる
+function setupBackButton() {
+  history.replaceState({ shogi: 'base' }, '');
+  history.pushState({ shogi: 'top' }, '');
+  addEventListener('popstate', () => {
+    if (handleBack()) history.pushState({ shogi: 'top' }, '');
+    else history.back();
+  });
+}
+
+function handleBack() {
+  const open = [...document.querySelectorAll('.sheet:not(.hidden)')].filter((el) => el.id !== 'termsSheet' && el.id !== 'updateSheet');
+  if (open.length) {
+    const el = open[open.length - 1];
+    if (el.id === 'confirmSheet' || el.id === 'promoSheet') el.click(); // 取り消しと同じ
+    else el.classList.add('hidden');
+    return true;
+  }
+  if (state.mode === 'practice') { endPractice(); return true; }
+  if (state.branch) { $('btnMainline').click(); return true; }
+  if (state.mode === 'play') { toast('対局をやめるときは、中断か投了を押してください'); return true; }
+  return false;
+}
+
 async function main() {
   if (new URLSearchParams(location.search).has('debug')) self.__shogiState = state; // 動作確認用
   checkEmbedded();
@@ -2204,6 +2234,7 @@ async function main() {
   bindUi();
   update();
   checkTerms();
+  setupBackButton();
   setupUpdates().catch(() => { /* 更新の確認ができなくても動作は続ける */ });
   await checkShared();
   try {

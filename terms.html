@@ -76,7 +76,15 @@
   </table>
   <p>エンジンの WebAssembly 版は、YaneuraOu.wasm、stockfish.wasm などの成果をもとに作られています。各作者の皆さんに感謝します。</p>
 
-  <a class="back" href="./">アプリに戻る</a>
+  <a class="back" href="./" id="back">アプリに戻る</a>
+  <script>
+    // アプリから開いたときは履歴を戻る（戻るボタンでこのページに来ないように）。直接開いたときは置き換えて移る
+    document.getElementById('back').onclick = (e) => {
+      e.preventDefault();
+      const fromApp = document.referrer && new URL(document.referrer).origin === location.origin && history.length > 1;
+      if (fromApp) history.back(); else location.replace('./');
+    };
+  </script>
 </main>
 </body>
 </html>

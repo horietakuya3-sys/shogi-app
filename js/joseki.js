@@ -7,6 +7,7 @@ import { SN_LINES } from './joseki_sn.js';
 import { SJ_LINES } from './joseki_sj.js';
 import { SN2_LINES } from './joseki_sn2.js';
 import { SN3_LINES } from './joseki_sn3.js';
+import { POINTS } from './joseki_points.js';
 
 export const LINES = [
   // 相矢倉（24手組）
@@ -179,6 +180,13 @@ export const tagName = (t) => TAG_NAMES[t] || t;
 export const STUDY_TAGS = Object.keys(TAG_NAMES);
 
 // 勉強に使う手順の一覧。同じ手順や、ほかの手順の途中までしかない手順は除く
+// 手順の文字列から短い鍵を作る（定跡の勉強のポイント表 js/joseki_points.js で使う）
+export function lineKey(moves) {
+  let h = 5381;
+  for (let i = 0; i < moves.length; i++) h = ((h * 33) ^ moves.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 export function studyLines() {
   const all = [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES];
   const uniq = [];
@@ -189,6 +197,15 @@ export function studyLines() {
     uniq.push(l);
   }
   return uniq.map((l) => ({ ...l, title: l.note ? l.note.replace(/（.*?）/g, '') : `${tagName(l.s)} 対 ${tagName(l.g)}` }));
+}
+
+// 定跡の勉強で問題にする手（side の手番の手だけ、初手を0とした手数）。表になければ side の手を全部
+export function studyPoints(l, side) {
+  const p = POINTS[lineKey(l.moves)];
+  const all = l.moves.split(' ').map((_, k) => k).filter((k) => k % 2 === side);
+  if (p == null) return all;
+  const ks = p ? p.split(',').map(Number).filter((k) => k % 2 === side) : [];
+  return ks.length ? ks : all.slice(-1);
 }
 
 // この局面で、どの戦法でもよいので定跡に入っている手

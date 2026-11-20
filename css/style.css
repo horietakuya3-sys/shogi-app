@@ -37,6 +37,7 @@ button { font: inherit; color: inherit; }
 .evalbar { height: 6px; background: #1a140e; border-radius: 3px; overflow: hidden; margin-top: 4px; }
 #evalFill { height: 100%; width: 50%; background: var(--sente); transition: width .3s; }
 .toggle { border: 1px solid var(--muted); background: none; border-radius: 16px; padding: 4px 12px; font-size: 14px; }
+.newgame { border-color: var(--accent); color: #ffc98f; white-space: nowrap; }
 .toggle.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 main { max-width: 520px; margin: 0 auto; padding: 6px 10px 20px; }
