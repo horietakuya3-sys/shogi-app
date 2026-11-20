@@ -197,7 +197,13 @@ export function studyLines() {
     if (l.moves.split(' ').length < 8) continue; // 手順違いの入り口など、短すぎるものは除く
     uniq.push(l);
   }
-  return uniq.map((l) => ({ ...l, title: l.note ? l.note.replace(/（.*?）/g, '') : `${tagName(l.s)} 対 ${tagName(l.g)}` }));
+  // かっこの中は省くが、省くと同じ題名がほかにもできるときは、かっこの中も残して見分けられるようにする
+  const short = (l) => (l.note ? l.note.replace(/（.*?）/g, '') : `${tagName(l.s)} 対 ${tagName(l.g)}`);
+  return uniq.map((l) => {
+    const t = short(l);
+    const dup = l.note && uniq.some((o) => o !== l && short(o) === t && o.note !== l.note);
+    return { ...l, title: dup ? l.note : t };
+  });
 }
 
 // 定跡の勉強で問題にする手（side の手番の手だけ、初手を0とした手数）。表になければ side の手を全部
