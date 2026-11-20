@@ -5,6 +5,7 @@ import { Position, moveToUsi } from './shogi.js';
 import { hashKey, shapeKey, rotSq } from './book.js';
 import { SN_LINES } from './joseki_sn.js';
 import { SJ_LINES } from './joseki_sj.js';
+import { SN2_LINES } from './joseki_sn2.js';
 
 export const LINES = [
   // 相矢倉（24手組）
@@ -125,7 +126,7 @@ let shapes = null; // 自分の駒の形 → Map(usi → 指す側の戦法の�
 function build() {
   tree = new Map();
   shapes = new Map();
-  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES]) {
+  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES]) {
     const pos = new Position();
     for (const u of line.moves.split(' ')) {
       const mv = pos.legalMoves().find((m) => moveToUsi(m) === u);
