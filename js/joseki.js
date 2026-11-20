@@ -1,7 +1,7 @@
 // 人の定跡（手で書いた本筋の手順）。AIの序盤はまずこれに沿って指す
 // s: 先手の戦法、g: 後手の戦法（AIの戦法の指定と同じ名前）。moves は初形からのUSI
 // 手順は tests でエンジンに通し、どの手も最善から大きく損していないことを確かめてある
-import { Position, moveToUsi } from './shogi.js';
+import { Position, moveToUsi, usiToMove, typeOf, colorOf } from './shogi.js';
 import { hashKey, shapeKey, rotSq } from './book.js';
 import { SN_LINES } from './joseki_sn.js';
 import { SJ_LINES } from './joseki_sj.js';
@@ -259,4 +259,37 @@ export function studyPoints(l, side) {
 // この局面で、どの戦法でもよいので定跡に入っている手
 export function anyJosekiMoves(pos) {
   return josekiMoves(pos, 'none');
+}
+
+// 読み込んだ棋譜の序盤を問題にするときのポイント（エンジンを使わない簡単な選び方）: side の手番の手数の一覧
+// 飛車を横に動かす手、角を取る手、歩をぶつける手、駒を取る手（取り返しは除く）。少なければ自分の手を間を空けて足す
+export function gamePoints(moves, side) {
+  const pos = new Position();
+  const cand = [];
+  let prevTo = null;
+  moves.forEach((u, k) => {
+    const mv = usiToMove(u);
+    const me = pos.turn;
+    const pc = mv.drop ? null : pos.board[mv.from];
+    const cap = mv.drop ? null : pos.board[mv.to];
+    const recapture = prevTo != null && mv.to === prevTo && !!cap;
+    let score = 0;
+    if (pc && typeOf(pc) === 'R' && !cap && (mv.from % 9) !== (mv.to % 9) && Math.floor(mv.from / 9) === Math.floor(mv.to / 9)) score = 3;
+    if (cap && !recapture && typeOf(cap) === 'B') score = 3;
+    if (pc && typeOf(pc) === 'P' && !cap) {
+      const t = pos.board[mv.to + (me === 0 ? -9 : 9)];
+      if (t && colorOf(t) !== me) score = 3;
+    }
+    if (cap && !recapture && !score) score = 2;
+    if (me === side && k >= 6 && !recapture) cand.push({ k, score });
+    pos.applyMove(mv);
+    prevTo = mv.to;
+  });
+  const want = Math.max(6, Math.ceil(cand.length / 3));
+  const sel = cand.filter((c) => c.score > 0).map((c) => c.k);
+  // 足りなければ、残りの自分の手からなるべく間を空けて足す
+  const rest = cand.filter((c) => !sel.includes(c.k)).map((c) => c.k);
+  const step = rest.length / Math.max(1, want - sel.length);
+  for (let i = 0; sel.length < want && i < rest.length; i += Math.max(1, step)) sel.push(rest[Math.floor(i)]);
+  return [...new Set(sel)].sort((a, b) => a - b);
 }

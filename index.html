@@ -205,10 +205,11 @@
 <div class="sheet hidden" id="josekiSheet">
   <div class="sheet-inner">
     <div class="sheet-title">定跡の勉強</div>
-    <div class="pf-sub">選んだ定跡の手順で、自分の手番の手を当てていきます。間違えてもやり直せます。指した手はエンジンの評価で「定跡手・最善手・次善手」などと判定します。</div>
+    <div class="pf-sub">定跡のポイントの手を当てたあと、その先をエンジン相手に5手指し、終わると一覧の次の定跡に続きます。間違えてもやり直せます。盤に読み込んだ棋譜（プロの棋譜など）の序盤でも勉強できます。</div>
     <div class="row"><span>戦法</span><select id="jsStrategy"></select></div>
     <div class="row"><span>手番</span><select id="jsSide"><option value="0">先手で</option><option value="1">後手で</option></select></div>
     <div id="jsList" class="js-list"></div>
+    <button id="btnJsGame" class="hidden">盤に読み込んだ棋譜の序盤で勉強する</button>
     <button id="btnJsClose" class="sub">閉じる</button>
   </div>
 </div>

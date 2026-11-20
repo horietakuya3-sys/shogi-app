@@ -6,7 +6,7 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
-import { studyLines, studyPoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES } from './joseki.js';
+import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
@@ -1608,6 +1608,18 @@ function openJosekiSheet() {
     $('josekiSheet').addEventListener('click', (e) => { if (e.target === $('josekiSheet')) $('josekiSheet').classList.add('hidden'); });
   }
   renderJosekiList();
+  // 盤に平手の棋譜を読み込んでいれば、その序盤（40手まで）を問題にできる。プロの棋譜などを自分で読み込んで使う
+  const g = state.mode === 'study' ? state.game : state.saved && state.saved.game;
+  const gm = g && g.startSfen === STARTPOS && g.moves.length >= 16 ? g.moves.slice(0, 40).map((m) => moveToUsi(m.move)) : null;
+  $('btnJsGame').classList.toggle('hidden', !gm);
+  $('btnJsGame').onclick = () => {
+    const side = Number($('jsSide').value);
+    const h = g.header || {};
+    const who = side === SENTE ? (h['先手'] || h.sente || '') : (h['後手'] || h.gote || '');
+    const l = { fromGame: true, title: `読み込んだ棋譜${who ? `（${who}側）` : ''}`, s: '', g: '', moves: gm.join(' '), points: gamePoints(gm, side) };
+    $('josekiSheet').classList.add('hidden');
+    startJosekiStudy(l, side);
+  };
   $('josekiSheet').classList.remove('hidden');
 }
 
@@ -1623,7 +1635,8 @@ function renderJosekiList() {
   if (!mine.length && !other.length) { el.innerHTML = `<div class="pf-sub">${tagName(tag)}の定跡はまだありません</div>`; return; }
   const head = (text) => { const d = document.createElement('div'); d.className = 'pf-sub js-head'; d.textContent = text; el.appendChild(d); };
   let headDone = false;
-  for (const [l, sd] of [...mine, ...other]) {
+  const list = [...mine, ...other];
+  for (const [i, [l, sd]] of list.entries()) {
     if (sd !== side && !headDone) {
       headDone = true;
       head(mine.length ? `${side === SENTE ? '後手' : '先手'}で指す${tagName(tag)}` : `${side === SENTE ? '先手' : '後手'}で${tagName(tag)}の定跡はまだないので、${side === SENTE ? '後手' : '先手'}で指す定跡を出します`);
@@ -1643,19 +1656,26 @@ function renderJosekiList() {
     b.innerHTML = `<span></span><span class="js-sub"></span>`;
     b.firstChild.textContent = `${sd === SENTE ? '☗' : '☖'}${l.title}（${ms.length}手・ポイント${studyPoints(l, sd).length}問）`;
     b.lastChild.textContent = `${tagName(l.s)} 対 ${tagName(l.g)}　…${ja.slice(-3).join(' ')}`;
-    b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, sd); };
+    // 選んだ定跡のあとは、一覧の続きの定跡を順に出す
+    b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, sd, list.slice(i + 1)); };
     el.appendChild(b);
   }
 }
 
-function startJosekiStudy(l, side) {
+const EXT_MAX = 5; // 定跡の手順が終わったあと、エンジンを相手に続けて指す問題の数
+const EXT_PASS = 80; // その先の問題で、最善からこの差までなら正解
+
+function startJosekiStudy(l, side, queue = [], total = null) {
   if (!state.engineReady) { toast('エンジンの準備ができてから始めてください'); return; }
   stopReview();
   engine.stop();
   if (state.mode !== 'practice') state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
   state.mode = 'practice';
-  const points = studyPoints(l, side);
-  state.practice = { type: 'joseki', line: l, side, moves: l.moves.split(' '), points, k: -1, phase: 'ask', right: 0, asked: 0 };
+  const points = l.points ? l.points.filter((k) => k % 2 === side) : studyPoints(l, side);
+  state.practice = {
+    type: 'joseki', line: l, side, moves: l.moves.split(' '), lineLen: l.moves.split(' ').length, points, k: -1, phase: 'ask',
+    right: 0, asked: 0, ext: null, queue, total: total || { asked: 0, right: 0, lines: 0 },
+  };
   $('practiceBar').classList.remove('hidden');
   josekiNext();
 }
@@ -1676,19 +1696,48 @@ function josekiPos(n) {
 
 function josekiHead() {
   const pr = state.practice;
+  if (pr.ext) return `${pr.line.title}　その先 ${pr.ext.n}/${EXT_MAX}（${pr.k + 1}手目）`;
   const i = pr.points.indexOf(pr.k);
-  return `定跡 ${pr.line.title}　ポイント${i + 1}/${pr.points.length}（${pr.k + 1}手目）`;
+  return `${pr.line.fromGame ? '' : '定跡 '}${pr.line.title}　ポイント${i + 1}/${pr.points.length}（${pr.k + 1}手目）`;
 }
 
-function josekiNext() {
+const josekiWord = () => (state.practice.line.fromGame ? '棋譜' : '定跡');
+
+// 次の問題へ。定跡のポイント → その先（エンジン相手に5問）→ 同じ戦法の次の定跡
+async function josekiNext() {
   const pr = state.practice;
-  // ポイントの手だけを問題にし、あいだの手は進めておく
-  const k = pr.points.find((x) => x > pr.k);
-  if (k == null) {
-    toast(`この定跡はここまでです（ポイント${pr.asked}問中 ${pr.right}問を1回で正解）`, 4000);
-    endPractice();
-    return;
+  if (!pr.ext) {
+    // ポイントの手だけを問題にし、あいだの手は進めておく
+    const k = pr.points.find((x) => x > pr.k);
+    if (k != null) { josekiAsk(k); return; }
+    // 定跡の手順が終わったら、その先をエンジン相手に続ける
+    pr.moves = pr.moves.slice(0, pr.lineLen);
+    pr.ext = { n: 0 };
   }
+  if (pr.ext.n >= EXT_MAX) { josekiLineDone(); return; }
+  // 相手の番ならエンジンが指す
+  let pos = josekiPos(pr.moves.length);
+  if (pos.turn !== pr.side) {
+    josekiSetBoard(pr.moves.length);
+    update();
+    $('practiceInfo').textContent = `${pr.line.title}　その先：相手が考えています…`;
+    $('btnPracticeNext').classList.add('hidden');
+    pr.phase = 'wait';
+    const r = await engine.searchOnce({ sfen: pos.toSfen(), multipv: 1, go: 'go movetime 800' });
+    if (state.practice !== pr) return;
+    const u = r && r.lines[0] && r.lines[0].pv && r.lines[0].pv[0];
+    if (!u || u === 'resign' || u === 'win') { josekiLineDone(); return; }
+    pr.moves.push(u);
+    sound();
+    pos = josekiPos(pr.moves.length);
+  }
+  if (!pos.legalMoves().length) { josekiLineDone(); return; }
+  pr.ext.n++;
+  josekiAsk(pr.moves.length);
+}
+
+function josekiAsk(k) {
+  const pr = state.practice;
   pr.k = k;
   pr.phase = 'ask';
   pr.first = true;
@@ -1696,13 +1745,30 @@ function josekiNext() {
   josekiSetBoard(k);
   state.flipped = pr.side === GOTE;
   const pos = josekiPos(k);
-  pr.judge = engine.searchOnce({ sfen: pos.toSfen(), multipv: 5, go: 'go movetime 1500' });
-  $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。定跡の手を指してください`;
+  pr.judge = engine.searchOnce({ sfen: pos.toSfen(), multipv: pr.ext ? 3 : 5, go: 'go movetime 1500' });
+  const ask = pr.ext ? '定跡のあとの局面です。よい手を指してください' : `${josekiWord()}の手を指してください`;
+  $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。${ask}`;
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeNext').classList.add('hidden');
   $('btnPracticeRetry').classList.add('hidden');
   renderCandidates([], '盤上で指してください');
   update();
+}
+
+// 1本終わったら、同じ戦法の次の定跡へ続ける
+function josekiLineDone() {
+  const pr = state.practice;
+  const t = pr.total;
+  t.asked += pr.asked; t.right += pr.right; t.lines++;
+  const msg = `${pr.line.title}はここまで（${pr.asked}問中 ${pr.right}問を1回で正解）`;
+  if (!pr.queue.length) {
+    toast(`${msg}。${t.lines > 1 ? `今回は${t.lines}本・${t.asked}問中 ${t.right}問を1回で正解でした` : ''}`, 5000);
+    endPractice();
+    return;
+  }
+  const [l, sd] = pr.queue[0];
+  toast(`${msg}。次の定跡：${l.title}`, 4000);
+  startJosekiStudy(l, sd, pr.queue.slice(1), t);
 }
 
 async function josekiAnswer(mv) {
@@ -1734,13 +1800,12 @@ async function josekiAnswer(mv) {
     if (r2 && r2.lines[0]) myV = -lineValue(r2.lines[0]);
   }
   const loss = myV == null ? null : Math.max(0, bestV - myV);
-  const lineMove = pr.moves[k];
-  const isLine = u === lineMove;
-  const isOther = !isLine && anyJosekiMoves(pos).includes(u);
+  const isLine = !pr.ext && u === pr.moves[k];
+  const isOther = !pr.ext && !isLine && !pr.line.fromGame && anyJosekiMoves(pos).includes(u);
   let label;
-  if (isLine) label = '定跡手';
+  if (isLine) label = `${josekiWord()}の手`;
   else if (isOther) label = '別の定跡の手';
-  else if (rank === 0) label = '最善手（この定跡とは別の手）';
+  else if (rank === 0) label = pr.ext ? '最善手' : `最善手（この${josekiWord()}とは別の手）`;
   else if (rank === 1) label = '次善手';
   else if (loss != null && loss <= 50) label = '互角に近い手';
   else if (loss != null && loss <= 150) label = 'やや損な手';
@@ -1751,14 +1816,17 @@ async function josekiAnswer(mv) {
   if (pr.first) pr.asked++;
   pr.lines = lines;
   pr.phase = 'done';
-  if (isLine) {
+  const ok = pr.ext ? rank === 0 || (loss != null && loss <= EXT_PASS) : isLine;
+  if (ok) {
     if (pr.first) pr.right++;
+    if (pr.ext) pr.moves = pr.moves.slice(0, k).concat([u]);
     $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}`;
     $('btnPracticeShow').classList.add('hidden');
     $('btnPracticeRetry').classList.add('hidden');
     $('btnPracticeNext').classList.remove('hidden');
   } else {
-    $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}。この定跡の手ではありません。もう一度か、答えを見てください`;
+    const why = pr.ext ? `最善との差が${EXT_PASS}を超えています` : `この${josekiWord()}の手ではありません`;
+    $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}。${why}。もう一度か、答えを見てください`;
     $('btnPracticeShow').classList.remove('hidden');
     $('btnPracticeRetry').classList.remove('hidden');
     $('btnPracticeNext').classList.add('hidden');
@@ -1772,7 +1840,8 @@ function josekiRetry() {
   pr.phase = 'ask';
   josekiSetBoard(pr.k);
   const pos = josekiPos(pr.k);
-  $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。もう一度、定跡の手を指してください`;
+  const ask = pr.ext ? 'よい手を指してください' : `${josekiWord()}の手を指してください`;
+  $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。もう一度、${ask}`;
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeRetry').classList.add('hidden');
   $('btnPracticeNext').classList.add('hidden');
@@ -1788,16 +1857,30 @@ async function josekiShow() {
   const k = pr.k;
   const pos = josekiPos(k);
   const prevTo = k > 0 ? usiToMove(pr.moves[k - 1]).to : null;
-  josekiSetBoard(k + 1);
-  const ja = moveToJa(pos, usiToMove(pr.moves[k]), prevTo);
-  $('practiceInfo').textContent = `${josekiHead()}　定跡は ${ja} です`;
   $('btnPracticeShow').classList.add('hidden');
   $('btnPracticeRetry').classList.add('hidden');
+  let lines;
+  if (pr.ext) {
+    // その先の問題の答えは、エンジンの最善手
+    $('practiceInfo').textContent = `${josekiHead()}　答えを調べています…`;
+    const res = pr.lines ? { lines: pr.lines } : await pr.judge;
+    if (state.practice !== pr) return;
+    lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
+    if (!lines.length) { josekiLineDone(); return; }
+    pr.moves = pr.moves.slice(0, k).concat([lines[0].pv[0]]);
+    josekiSetBoard(k + 1);
+    $('practiceInfo').textContent = `${josekiHead()}　最善手は ${moveToJa(pos, usiToMove(lines[0].pv[0]), prevTo)} です`;
+  } else {
+    josekiSetBoard(k + 1);
+    $('practiceInfo').textContent = `${josekiHead()}　${josekiWord()}は ${moveToJa(pos, usiToMove(pr.moves[k]), prevTo)} です`;
+  }
   $('btnPracticeNext').classList.remove('hidden');
   update();
-  const res = pr.lines ? { lines: pr.lines } : await pr.judge;
-  if (state.practice !== pr) return;
-  const lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
+  if (!lines) {
+    const res = pr.lines ? { lines: pr.lines } : await pr.judge;
+    if (state.practice !== pr) return;
+    lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
+  }
   revealCandidates(pos, lines.slice(0, 3));
 }
 
