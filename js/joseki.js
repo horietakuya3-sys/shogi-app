@@ -44,7 +44,7 @@ export const LINES = [
   // 相矢倉：後手が早く８五歩と突いたら▲７七銀
   { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 7i6h 8d8e 6h7g 3c3d 6g6f 7a6b 5g5f 5c5d 3i4h 3a4b 4i5h 4a3b 6i7h 5a4a 5i6i 6a5b 5h6g 7c7d 8h7i' },
   // 矢倉：▲７七銀を早く上がり、▲２六歩と突く形
-  { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 7i6h 3c3d 6h7g 7a6b 2g2f 5c5d 3i4h 3a4b 4i5h 4a3b 6i7h 5a4a 5i6i 6a5b 6g6f 4b3c 5h6g 2b3a 8h7i 7c7d' },
+  { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 7i6h 3c3d 6h7g 7a6b 2g2f 3a4b 3i4h 5c5d 2f2e 4b3c 4i5h 4a3b 6i7h 5a4a 5i6i 6a5b 6g6f 7c7d 5h6g 2b3a 8h7i 4c4d' },
   // 先手居飛車穴熊 対 後手四間飛車
   { s: 'ibisha', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 2f2e 2b3c 3i4h 8b4b 5i6h 5a6b 6h7h 6b7b 8h7g 7b8b 9i9h 7a7b 7h8h 6a5b 8h9i 9c9d 7i8h 1c1d 6i7i' },
   // 先手居飛車 対 後手四間飛車（初手▲２六歩）
@@ -61,6 +61,20 @@ export const LINES = [
   { s: 'naka', g: 'ibisha', moves: '7g7f 3c3d 6g6f 8c8d 5g5f 8d8e 8h7g 7a6b 2h5h 5a4b 5i4h 4b3b 4h3h 6a5b 3h2h 7c7d 3i3h' },
   // 先手向かい飛車 対 後手居飛車（後手が△３四歩を先に突く）
   { s: 'mukai', g: 'ibisha', moves: '7g7f 3c3d 6g6f 8c8d 8h7g 7a6b 2h8h 5a4b 5i4h 4b3b 4h3h 6a5b 3h2h' },
+  // 相矢倉：▲２六歩には△４二銀、▲２五歩に△３三銀と受ける
+  { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 7i6h 3c3d 6g6f 7a6b 2g2f 3a4b 2f2e 4b3c 5g5f 5c5d 3i4h 4a3b 4i5h 5a4a 6i7h 6a5b 5i6i 7c7d 5h6g 2b3a 6h7g 4c4d 8h7i' },
+  { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 7i6h 3c3d 6g6f 7a6b 5g5f 5c5d 2g2f 3a4b 3i4h 4a3b 2f2e 4b3c 4i5h 5a4a 6i7h 6a5b 5i6i 7c7d' },
+  // 先手居飛車（舟囲い・▲５七銀左）対 後手四間飛車
+  { s: 'ibisha', g: 'shiken', moves: '7g7f 3c3d 2g2f 4c4d 2f2e 2b3c 3i4h 8b4b 5i6h 5a6b 6h7h 6b7b 4i5h 7b8b 5g5f 7a7b 7i6h 6a5b 6h5g 9c9d 9g9f 1c1d 1g1f' },
+  // 先手居飛車 対 後手雁木（△４四歩・△３三角から）
+  { s: 'ibisha', g: 'gangi', moves: '7g7f 3c3d 2g2f 4c4d 2f2e 2b3c 3i4h 3a4b 6i7h 4a3b 5i6i 7a6b 9g9f 6c6d 4g4f 6b6c 4h4g 4b4c 3g3f 5a4a 5g5f 6a5b' },
+  // 先手四間飛車 対 後手居飛車穴熊
+  { s: 'shiken', g: 'ibisha', moves: '7g7f 8c8d 6g6f 3c3d 2h6h 7a6b 5i4h 5a4b 4h3h 4b3b 3h2h 2b3c 3i3h 3b2b 1g1f 1a1b 6i5h 2b1a 9g9f 3a2b' },
+  // 先手三間飛車 対 後手居飛車穴熊
+  { s: 'sangen', g: 'ibisha', moves: '7g7f 8c8d 6g6f 3c3d 2h7h 7a6b 5i4h 5a4b 4h3h 4b3b 3h2h 2b3c 3i3h 3b2b 1g1f 1a1b 6i5h 2b1a 9g9f 3a2b' },
+  // 手順違いで角換わり・相掛かりの本筋に合流する入り口
+  { s: 'kakugawari', g: 'kakugawari', moves: '2g2f 8c8d 7g7f' },
+  { s: 'yagura', g: 'yagura', moves: '7g7f 8c8d 2g2f 3a4b' },
 ];
 
 // 居飛車・定跡まかせを選んだときに使える戦法
