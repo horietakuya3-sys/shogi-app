@@ -8,14 +8,14 @@ import { josekiMoves, josekiShapeMoves } from './joseki.js';
 // 弱さは主に読みの浅さで出す。許す損が大きいと、持久戦で意味のない手を続けて評価値を下げすぎるので小さめにしている（v23）
 export const LEVELS = [
   null,
-  { name: 'Lv1 入門', nodes: 1500, mpv: 10, tol: 300 },
-  { name: 'Lv2', nodes: 3000, mpv: 10, tol: 220 },
-  { name: 'Lv3', nodes: 6000, mpv: 8, tol: 160 },
-  { name: 'Lv4', nodes: 12000, mpv: 8, tol: 120 },
-  { name: 'Lv5', nodes: 25000, mpv: 7, tol: 90 },
-  { name: 'Lv6', nodes: 50000, mpv: 6, tol: 70 },
-  { name: 'Lv7', nodes: 100000, mpv: 5, tol: 50 },
-  { name: 'Lv8', nodes: 300000, mpv: 4, tol: 35 },
+  { name: 'Lv1 入門', nodes: 2000, mpv: 10, tol: 300 },
+  { name: 'Lv2', nodes: 4000, mpv: 10, tol: 220 },
+  { name: 'Lv3', nodes: 8000, mpv: 8, tol: 160 },
+  { name: 'Lv4', nodes: 20000, mpv: 8, tol: 120 },
+  { name: 'Lv5', nodes: 50000, mpv: 7, tol: 90 },
+  { name: 'Lv6', nodes: 100000, mpv: 6, tol: 70 },
+  { name: 'Lv7', nodes: 200000, mpv: 5, tol: 50 },
+  { name: 'Lv8', nodes: 400000, mpv: 4, tol: 35 },
   { name: 'Lv9', nodes: 1000000, mpv: 3, tol: 20 },
   { name: 'Lv10 最強', nodes: 0, mpv: 1, tol: 0 },
 ];
@@ -74,6 +74,8 @@ const PLAN_TOL_ATTACK = 150; // 飛車を振る手に許す損（エンジンは
 const OPEN_END = 24; // ここまでは序盤として、全レベルで深く読み、損の小さい手だけを指す
 const MID_END = 40; // ここにかけてレベル本来の読みの量と許す損に戻す
 const OPEN_NODES = 150000; // 序盤の読みの量
+const DEEP_NODES = 300000; // 選んだ手が大きく損していないか確かめるときの読みの量
+const GUARD_EXTRA = 60; // 確かめたときに、許す損をこれ以上超えていたら選び直す
 const OPEN_TOL = 25; // 序盤に許す損（大きいと７七桂のような筋の悪い手が混じる）
 
 function mirrorUsi(u) {
@@ -179,6 +181,19 @@ export class AiPlayer {
     const legal = pos.legalMoves();
     const ms = josekiMoves(pos, this.strategyKey).map((u) => legal.find((x) => moveToUsi(x) === u)).filter(Boolean);
     return ms.length ? ms[Math.floor(Math.random() * ms.length)] : null;
+  }
+
+  // 選んだ手を深く読み直して、最善からの損を返す（浅い読みの見落としで大きく損する手を避けるため）。null は中断
+  async deepLoss(pos, mv) {
+    const n = Math.max(DEEP_NODES, (this.cfg.nodes || 0) * 2);
+    const a = await this.engine.searchOnce({ sfen: pos.toSfen(), multipv: 1, go: `go nodes ${n}` });
+    if (!a) return null;
+    const p = pos.clone();
+    p.applyMove(mv);
+    const b = await this.engine.searchOnce({ sfen: p.toSfen(), multipv: 1, go: `go nodes ${n}` });
+    if (!b) return null;
+    if (!a.lines[0] || !b.lines[0]) return 0;
+    return value(a.lines[0]) + value(b.lines[0]);
   }
 
   // 候補の手が、最善と比べて tol 以内の損か（読み直しが必要なら1回だけ読む）。null は中断
@@ -294,7 +309,12 @@ export class AiPlayer {
         const loss = await this.lossOf(pos, mv, lines, bestV);
         if (loss == null) return null;
         const isRook = typeOf(pos.board[mv.from]) === 'R';
-        if (loss <= (isRook && STRATEGIES[this.strategyKey].ranged ? PLAN_TOL_ATTACK : SHAPE_TOL)) return { move: mv, shape: true };
+        const lim = isRook && STRATEGIES[this.strategyKey].ranged ? PLAN_TOL_ATTACK : SHAPE_TOL;
+        if (loss <= lim) {
+          const dl = await this.deepLoss(pos, mv);
+          if (dl == null) return null;
+          if (dl <= lim + GUARD_EXTRA) return { move: mv, shape: true };
+        }
       }
       return false;
     };
@@ -327,7 +347,14 @@ export class AiPlayer {
         const l2 = r2.lines[0];
         if (l2) pv = -value(l2);
       }
-      if (pv != null && bestV - pv <= (this.planAttack[this.planIdx] ? PLAN_TOL_ATTACK : PLAN_TOL)) {
+      const plim = this.planAttack[this.planIdx] ? PLAN_TOL_ATTACK : PLAN_TOL;
+      let okPlan = pv != null && bestV - pv <= plim;
+      if (okPlan) {
+        const dl = await this.deepLoss(pos, planMv);
+        if (dl == null) return null;
+        okPlan = dl <= plim + GUARD_EXTRA;
+      }
+      if (okPlan) {
         this.planIdx++;
         this.stepFails = 0;
         return { move: planMv, plan: true };
@@ -352,6 +379,13 @@ export class AiPlayer {
     let r = Math.random() * w.reduce((a, b) => a + b, 0);
     let pick = pool[0];
     for (let i = 0; i < pool.length; i++) { r -= w[i]; if (r <= 0) { pick = pool[i]; break; } }
+    const bestLine = lines.find((l) => value(l) === bestV);
+    if (pick !== bestLine && bestLine) {
+      // 浅い読みで選んだ最善以外の手は、深く読み直して損が大きすぎたら最善の手にする
+      const dl = await this.deepLoss(pos, usiToMove(pick.pv[0]));
+      if (dl == null) return null;
+      if (dl > tol + GUARD_EXTRA) pick = bestLine;
+    }
     return { move: usiToMove(pick.pv[0]) };
   }
 }
