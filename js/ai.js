@@ -39,6 +39,7 @@ export const STRATEGIES = {
   migishiken: { name: '右四間飛車', attack: ['7g7f', '4g4f', '2h4h', '3i3h', '3h4g'], castle: 'elmo' },
   elmo: { name: 'エルモ急戦（対振り飛車）', attack: ['7g7f', '2g2f', '2f2e', '3i4h'], castle: 'elmo' },
   millennium: { name: 'ミレニアム（対振り飛車）', attack: ['7g7f', '2g2f', '2f2e', '3i4h', '4h5g'], castle: 'millennium' },
+  kishu: { name: '奇襲（鬼殺し・嬉野流・パックマンなど）', attack: ['7g7f', '2g2f'], castle: 'simple' },
   fujii: { name: '藤井システム', ranged: true, attack: ['7g7f', '6g6f', '2h6h', '1g1f', '8h7g'], castle: 'mino' },
 };
 export const RANDOM_POOL = ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai', 'none'];
@@ -168,18 +169,25 @@ export class AiPlayer {
   shapeCands(pos, legal) {
     if (pos.ply > PLAN_MAX_PLY) return [];
     const out = [];
-    for (const u of josekiShapeMoves(pos, this.strategyKey)) {
+    for (const u of this.fallbackMoves(josekiShapeMoves, pos)) {
       const mv = legal.find((x) => moveToUsi(x) === u);
       if (mv && !pos.board[mv.to]) out.push(mv);
     }
     return out.sort(() => Math.random() - 0.5);
   }
 
+  // 対振り飛車用の戦法（エルモ・ミレニアム）や右四間で、相手が振らずにその戦法の定跡がないときは、居飛車の定跡で指す
+  fallbackMoves(fn, pos) {
+    const ms = fn(pos, this.strategyKey);
+    if (ms.length || !['elmo', 'millennium', 'migishiken'].includes(this.strategyKey)) return ms;
+    return fn(pos, 'ibisha');
+  }
+
   // 人の定跡の手（js/joseki.js）。レベルによらず指す
   josekiMove(pos) {
     if (this.castleChosen && pos.ply > 12) return null; // 囲いを指定したときは、途中から囲いの手順を優先
     const legal = pos.legalMoves();
-    const ms = josekiMoves(pos, this.strategyKey).map((u) => legal.find((x) => moveToUsi(x) === u)).filter(Boolean);
+    const ms = this.fallbackMoves(josekiMoves, pos).map((u) => legal.find((x) => moveToUsi(x) === u)).filter(Boolean);
     return ms.length ? ms[Math.floor(Math.random() * ms.length)] : null;
   }
 

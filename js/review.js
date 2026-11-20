@@ -34,7 +34,7 @@ export function scoreForGraph(s) {
 
 // 戻り値: results[i] = { score, best, pv }（i = 0..手数、i手目を指した後の局面）
 // getFocus(): 今見ている手数。そこから先を優先して解析し、飛ばした手前の局面は最後に埋める
-export async function analyzeGame(engine, startSfen, moves, { movetime = 1000, onProgress, isCancelled, results = [], getFocus } = {}) {
+export async function analyzeGame(engine, startSfen, moves, { movetime = 1000, onProgress, onStart, isCancelled, results = [], getFocus } = {}) {
   const positions = [new Position(startSfen)];
   for (const m of moves) { const p = positions[positions.length - 1].clone(); p.applyMove(m.move); positions.push(p); }
   const N = positions.length;
@@ -52,6 +52,7 @@ export async function analyzeGame(engine, startSfen, moves, { movetime = 1000, o
     const i = nextIndex();
     if (i < 0) break;
     const pos = positions[i];
+    if (onStart) onStart(i);
     if (!pos.legalMoves().length) {
       // 詰み（指せる手がない）: 手番側の負け
       results[i] = { score: { mate: pos.turn === SENTE ? -1 : 1, terminal: true }, best: null, pv: [] };

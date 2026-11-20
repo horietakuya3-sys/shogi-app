@@ -6,12 +6,13 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
+import { studyLines, STUDY_TAGS, tagName, anyJosekiMoves } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
-  buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES,
+  buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES, detectStrategy,
 } from './records.js';
 import { value as lineValue } from './ai.js';
 import { computeRatings, rankOf, nextRank, isRated, timeClass, TIME_CLASSES, AI_RATING, PROVISIONAL_GAMES } from './rating.js';
@@ -125,6 +126,7 @@ function playMove(mv) {
 
 function goTo(n) {
   if (state.mode === 'play' || state.mode === 'practice') return;
+  state.review.manualAt = Date.now(); // 局後解析中に自分で動かしたら、しばらく盤を解析に合わせない
   const max = line().length;
   state.cursor = Math.max(0, Math.min(max, n));
   state.selected = null;
@@ -429,7 +431,24 @@ function requestAnalysis() {
     renderCandidates([], state.analyze ? 'AIが考えています…' : '解析はオフです（解析ボタンでオン）');
     return;
   }
-  if (state.review.running) { renderCandidates([], '局後解析中です…'); return; }
+  if (state.review.running) {
+    // 局後解析の結果のうち、いま盤に出ている局面のものを候補手の欄に出す
+    const res = !state.branch && state.review.results[state.cursor];
+    if (res && res.pv && res.pv.length) {
+      const turn = curPos().turn;
+      const mover = (sc) => (sc.mate != null ? { mate: turn === SENTE ? sc.mate : -sc.mate } : { cp: turn === SENTE ? sc.cp : -sc.cp });
+      const ls = [{ pv: res.pv, ...mover(res.score) }];
+      if (res.second && res.score2) ls.push({ pv: [res.second], ...mover(res.score2) });
+      state.candidates = ls;
+      renderArrows();
+      renderCandidates(ls);
+    } else {
+      state.candidates = [];
+      renderArrows();
+      renderCandidates([], '局後解析中です…（この局面はこれから解析します）');
+    }
+    return;
+  }
   if (!state.analyze) { engine.stop(); state.candidates = []; renderArrows(); renderCandidates([], '解析はオフです（解析ボタンでオン）'); return; }
   const pos = curPos();
   if (!pos.legalMoves().length) {
@@ -762,7 +781,14 @@ function endPlay(word, winner, { record = true } = {}) {
   const saving = record ? saveRecord('play', humans.length === 1 && aiP ? aiP.level : null, { timeControl: p.timeControl, undo: p.undoCount }) : null;
   if (ratedGame && saving) saving.then((key) => showRatingChange(key, p.undoCount));
   // ランダムにしていたAIの戦法を明かす
-  const reveal = p.players.map((x, i) => (x.ai ? `${i === 0 ? '☗' : '☖'}${x.label}の戦法: ${x.real}` : '')).filter(Boolean).join('\n');
+  // 実際に指した戦型を棋譜から判定して示し、AIが選んだ方針は括弧に添える
+  const reveal = p.players.map((x, i) => {
+    if (!x.ai) return '';
+    const k = detectStrategy(state.game.startSfen, state.game.moves, i);
+    const actual = k && k !== 'unknown' ? STRATEGY_NAMES[k].replace('（その他）', '') : '';
+    const plan = `${x.strategy === 'auto' ? 'ランダムで選んだ方針' : '方針'}: ${x.real}`;
+    return `${i === 0 ? '☗' : '☖'}${x.label}の戦型: ${actual || '判定できず'}（${plan}）`;
+  }).filter(Boolean).join('\n');
   state.play = null;
   setTimeout(askPendingUpdate, 1500);
   $('endRating').textContent = '';
@@ -856,6 +882,12 @@ async function startReview() {
         renderReview();
         renderMoveList();
       }
+      // 盤を解析し終えた局面に合わせ、その結果を候補手の欄に出す（自分で手を動かしたあと8秒は合わせない）
+      if (!state.branch && state.mode === 'study' && Date.now() - (r.manualAt || 0) >= 8000 && state.cursor !== i) {
+        state.cursor = i;
+        state.selected = null;
+        update();
+      } else if (i === state.cursor && !state.branch) requestAnalysis();
     },
   });
   if (r.token !== token) return;
@@ -1317,6 +1349,7 @@ function beginPractice(queue, type) {
 
 // 同じ問題をもう一度（出題の頻度は、最初の解答で決めたまま変えない）
 function retryPractice() {
+  if (state.practice && state.practice.type === 'joseki') { josekiRetry(); return; }
   const pr = state.practice;
   if (!pr || pr.phase !== 'done') return;
   pr.idx--;
@@ -1325,6 +1358,7 @@ function retryPractice() {
 }
 
 function nextPractice() {
+  if (state.practice && state.practice.type === 'joseki') { josekiNext(); return; }
   const pr = state.practice;
   if (!pr) return;
   const retry = !!pr.retry;
@@ -1379,6 +1413,7 @@ function nextPractice() {
 }
 
 async function answerPractice(mv) {
+  if (state.practice && state.practice.type === 'joseki') { josekiAnswer(mv); return; }
   const pr = state.practice;
   if (!pr || pr.phase !== 'ask') return;
   if (isMateType(pr.item)) { answerMate(mv); return; }
@@ -1444,7 +1479,7 @@ function revealCandidates(pos, lines) {
     const row = document.createElement('div');
     row.className = 'cand' + (i === 0 ? ' first' : '');
     row.innerHTML = '<span class="no"></span><span class="mv"></span><span class="sc"></span><span class="pv"></span>';
-    const ja = pvToJa(pos, ln.pv, state.practice ? state.practice.item.prevTo : null);
+    const ja = pvToJa(pos, ln.pv, state.practice && state.practice.item ? state.practice.item.prevTo : null);
     row.querySelector('.no').textContent = i + 1;
     row.querySelector('.mv').textContent = ja[0] || '';
     row.querySelector('.sc').textContent = fmtScore(s);
@@ -1518,6 +1553,7 @@ async function finishMate(ok, msg) {
 }
 
 async function revealPractice() {
+  if (state.practice && state.practice.type === 'joseki') { josekiShow(); return; }
   const pr = state.practice;
   if (!pr || pr.phase !== 'ask') return;
   if (isMateType(pr.item)) {
@@ -1543,6 +1579,203 @@ async function revealPractice() {
   $('btnPracticeShow').classList.add('hidden');
   $('btnPracticeNext').classList.remove('hidden');
   $('btnPracticeRetry').classList.remove('hidden');
+  revealCandidates(pos, lines);
+}
+
+// ---- 定跡の勉強 ----
+// 選んだ定跡の手順で、自分の手番の手を当てる。判定はエンジンの評価で行い、間違えてもやり直せる
+function openJosekiSheet() {
+  if (state.mode === 'play') return;
+  const lines = studyLines();
+  const sel = $('jsStrategy');
+  if (!sel.options.length) {
+    sel.innerHTML = STUDY_TAGS.filter((t) => lines.some((l) => l.s === t || l.g === t))
+      .map((t) => `<option value="${t}">${tagName(t)}</option>`).join('');
+    sel.onchange = renderJosekiList;
+    $('jsSide').onchange = renderJosekiList;
+    $('btnJsClose').onclick = () => $('josekiSheet').classList.add('hidden');
+    $('josekiSheet').addEventListener('click', (e) => { if (e.target === $('josekiSheet')) $('josekiSheet').classList.add('hidden'); });
+  }
+  renderJosekiList();
+  $('josekiSheet').classList.remove('hidden');
+}
+
+function renderJosekiList() {
+  const tag = $('jsStrategy').value;
+  const side = Number($('jsSide').value);
+  const lines = studyLines().filter((l) => (side === SENTE ? l.s : l.g) === tag);
+  const el = $('jsList');
+  el.innerHTML = '';
+  if (!lines.length) { el.innerHTML = `<div class="pf-sub">${side === SENTE ? '先手' : '後手'}で${tagName(tag)}の定跡はまだありません。手番を変えてみてください</div>`; return; }
+  for (const l of lines) {
+    const ms = l.moves.split(' ');
+    // 最後の数手を見せて、ほかの手順と見分けられるようにする
+    const p = new Position();
+    const ja = [];
+    let prevTo = null;
+    for (const u of ms) {
+      const mv = usiToMove(u);
+      ja.push(moveToJa(p, mv, prevTo));
+      prevTo = mv.to;
+      p.applyMove(mv);
+    }
+    const b = document.createElement('button');
+    b.innerHTML = `<span></span><span class="js-sub"></span>`;
+    b.firstChild.textContent = `${l.title}（${ms.length}手）`;
+    b.lastChild.textContent = `${tagName(l.s)} 対 ${tagName(l.g)}　…${ja.slice(-3).join(' ')}`;
+    b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, side); };
+    el.appendChild(b);
+  }
+}
+
+function startJosekiStudy(l, side) {
+  if (!state.engineReady) { toast('エンジンの準備ができてから始めてください'); return; }
+  stopReview();
+  engine.stop();
+  if (state.mode !== 'practice') state.saved = { game: state.game, branch: state.branch, cursor: state.cursor, flipped: state.flipped, review: { ...state.review } };
+  state.mode = 'practice';
+  state.practice = { type: 'joseki', line: l, side, moves: l.moves.split(' '), k: -1, phase: 'ask', right: 0, asked: 0 };
+  $('practiceBar').classList.remove('hidden');
+  josekiNext();
+}
+
+function josekiSetBoard(n) {
+  const pr = state.practice;
+  state.game = { startSfen: STARTPOS, moves: pr.moves.slice(0, n).map((u) => ({ move: usiToMove(u), comment: '' })), header: {}, result: '', summary: '', meta: { mySide: null } };
+  state.branch = null;
+  state.cursor = n;
+  state.selected = null;
+}
+
+function josekiPos(n) {
+  const p = new Position();
+  for (const u of state.practice.moves.slice(0, n)) p.applyMove(usiToMove(u));
+  return p;
+}
+
+function josekiHead() {
+  const pr = state.practice;
+  return `定跡 ${pr.line.title}　${pr.k + 1}手目`;
+}
+
+function josekiNext() {
+  const pr = state.practice;
+  let k = pr.k + 1;
+  while (k < pr.moves.length && k % 2 !== pr.side) k++;
+  if (k >= pr.moves.length) {
+    toast(`この定跡はここまでです（${pr.asked}問中 ${pr.right}問を1回で正解）`, 4000);
+    endPractice();
+    return;
+  }
+  pr.k = k;
+  pr.phase = 'ask';
+  pr.first = true;
+  pr.lines = null;
+  josekiSetBoard(k);
+  state.flipped = pr.side === GOTE;
+  const pos = josekiPos(k);
+  pr.judge = engine.searchOnce({ sfen: pos.toSfen(), multipv: 5, go: 'go movetime 1500' });
+  $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。定跡の手を指してください`;
+  $('btnPracticeShow').classList.remove('hidden');
+  $('btnPracticeNext').classList.add('hidden');
+  $('btnPracticeRetry').classList.add('hidden');
+  renderCandidates([], '盤上で指してください');
+  update();
+}
+
+async function josekiAnswer(mv) {
+  const pr = state.practice;
+  if (pr.phase !== 'ask') return;
+  sound();
+  pr.phase = 'judging';
+  const k = pr.k;
+  const pos = josekiPos(k);
+  const prevTo = k > 0 ? usiToMove(pr.moves[k - 1]).to : null;
+  state.game.moves = state.game.moves.slice(0, k).concat([{ move: mv, comment: '' }]);
+  state.cursor = k + 1;
+  state.selected = null;
+  update();
+  renderCandidates([], '判定しています…');
+  const u = moveToUsi(mv);
+  const res = await pr.judge;
+  if (state.practice !== pr) return;
+  const lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
+  const bestV = lines.length ? lineValue(lines[0]) : 0;
+  let myV = null;
+  const rank = lines.findIndex((l) => l.pv[0] === u);
+  if (rank >= 0) myV = lineValue(lines[rank]);
+  else {
+    const p2 = pos.clone();
+    p2.applyMove(mv);
+    const r2 = await engine.searchOnce({ sfen: p2.toSfen(), multipv: 1, go: 'go movetime 1000' });
+    if (state.practice !== pr) return;
+    if (r2 && r2.lines[0]) myV = -lineValue(r2.lines[0]);
+  }
+  const loss = myV == null ? null : Math.max(0, bestV - myV);
+  const lineMove = pr.moves[k];
+  const isLine = u === lineMove;
+  const isOther = !isLine && anyJosekiMoves(pos).includes(u);
+  let label;
+  if (isLine) label = '定跡手';
+  else if (isOther) label = '別の定跡の手';
+  else if (rank === 0) label = '最善手（この定跡とは別の手）';
+  else if (rank === 1) label = '次善手';
+  else if (loss != null && loss <= 50) label = '互角に近い手';
+  else if (loss != null && loss <= 150) label = 'やや損な手';
+  else if (loss != null && loss <= 300) label = '疑問手';
+  else label = '悪手';
+  const myJa = moveToJa(pos, mv, prevTo);
+  const lossText = loss == null ? '' : loss === 0 ? '（評価値は最善と同じ）' : `（最善との差 ${loss}）`;
+  if (pr.first) pr.asked++;
+  pr.lines = lines;
+  pr.phase = 'done';
+  if (isLine) {
+    if (pr.first) pr.right++;
+    $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}`;
+    $('btnPracticeShow').classList.add('hidden');
+    $('btnPracticeRetry').classList.add('hidden');
+    $('btnPracticeNext').classList.remove('hidden');
+  } else {
+    $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}。この定跡の手ではありません。もう一度か、答えを見てください`;
+    $('btnPracticeShow').classList.remove('hidden');
+    $('btnPracticeRetry').classList.remove('hidden');
+    $('btnPracticeNext').classList.add('hidden');
+  }
+  pr.first = false;
+  revealCandidates(pos, lines);
+}
+
+function josekiRetry() {
+  const pr = state.practice;
+  pr.phase = 'ask';
+  josekiSetBoard(pr.k);
+  const pos = josekiPos(pr.k);
+  $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。もう一度、定跡の手を指してください`;
+  $('btnPracticeShow').classList.remove('hidden');
+  $('btnPracticeRetry').classList.add('hidden');
+  $('btnPracticeNext').classList.add('hidden');
+  renderCandidates([], '盤上で指してください（やり直し）');
+  update();
+}
+
+async function josekiShow() {
+  const pr = state.practice;
+  if (pr.first) pr.asked++;
+  pr.first = false;
+  pr.phase = 'done';
+  const k = pr.k;
+  const pos = josekiPos(k);
+  const prevTo = k > 0 ? usiToMove(pr.moves[k - 1]).to : null;
+  josekiSetBoard(k + 1);
+  const ja = moveToJa(pos, usiToMove(pr.moves[k]), prevTo);
+  $('practiceInfo').textContent = `${josekiHead()}　定跡は ${ja} です`;
+  $('btnPracticeShow').classList.add('hidden');
+  $('btnPracticeRetry').classList.add('hidden');
+  $('btnPracticeNext').classList.remove('hidden');
+  update();
+  const res = pr.lines ? { lines: pr.lines } : await pr.judge;
+  if (state.practice !== pr) return;
+  const lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
   revealCandidates(pos, lines);
 }
 
@@ -1751,9 +1984,14 @@ function bindUi() {
       try { await navigator.clipboard.writeText(kifText()); toast('KIFをコピーしました'); } catch { toast('コピーできませんでした'); }
     }
     if (act === 'flip') { state.flipped = !state.flipped; update(); }
-    if (act === 'terms') { location.href = 'terms.html'; return; }
+    if (act === 'settings') $('settingsSheet').classList.remove('hidden');
+    if (act === 'joseki') openJosekiSheet();
     if (act === 'newGame') loadGame({ startSfen: STARTPOS, moves: [], header: {}, result: '' }, { silent: true });
   });
+  const st = $('settingsSheet');
+  st.addEventListener('click', (e) => { if (e.target === st) st.classList.add('hidden'); });
+  $('btnSettingsClose').onclick = () => st.classList.add('hidden');
+  $('btnSettingsTerms').onclick = () => { location.href = 'terms.html'; };
   $('selMultiPV').value = String(state.multipv);
   $('selMultiPV').onchange = (e) => { state.multipv = Number(e.target.value); persist(); requestAnalysis(); };
   $('chkSpeech').checked = state.speech;

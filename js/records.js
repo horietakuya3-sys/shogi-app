@@ -61,10 +61,10 @@ export function detectStrategy(startSfen, moves, side) {
   const mine = (pc, t) => pc && colorOf(pc) === side && typeOf(pc) === t;
   let rookSq = rookHome;
   let bishopTraded = false, yokofu = false;
-  let myRookPawn5 = false, oppRookPawn5 = false;
+  let aigakari = false; // 序盤10手のうちに、互いに角道を開けないまま飛車先の歩を５段目まで伸ばした
   let ranged = null;
   let snap = null; // 30手目あたりの局面（囲いの判定用）
-  const limit = Math.min(moves.length, 40);
+  const limit = Math.min(moves.length, 50); // 囲いは50手目あたりの形で見る
   for (let i = 0; i < limit; i++) {
     const m = moves[i].move;
     const pc = m.drop ? null : pos.board[m.from];
@@ -90,19 +90,20 @@ export function detectStrategy(startSfen, moves, side) {
     pos.applyMove(m);
     // 飛車先の歩が５段目まで伸びたか（相掛かりの判定用）
     const myP = side === SENTE ? 'P' : 'p', opP = side === SENTE ? 'p' : 'P';
-    if (pos.board[view(2, 5)] === myP) myRookPawn5 = true;
-    if (pos.board[view(8, 5)] === opP) oppRookPawn5 = true;
+    if (i < 10 && pos.board[view(2, 5)] === myP && pos.board[view(8, 5)] === opP
+      && pos.board[view(7, 7)] === myP && pos.board[view(3, 3)] === opP) aigakari = true;
     if (i === Math.min(limit, 30) - 1) snap = pos.clone();
   }
   if (ranged) return ranged;
   if (yokofu) return 'yokofu';
   if (bishopTraded) return 'kakugawari';
-  const b = (snap || pos).board;
+  // 囲いは30手目と50手目あたりの形の両方で見る
+  const boards = [snap, pos].filter(Boolean).map((x) => x.board);
   // 矢倉: ７七銀と６七金（または７八金と８八玉）
-  if (mine(b[view(7, 7)], 'S') && (mine(b[view(6, 7)], 'G') || mine(b[view(8, 8)], 'K'))) return 'yagura';
+  if (boards.some((b) => mine(b[view(7, 7)], 'S') && (mine(b[view(6, 7)], 'G') || mine(b[view(8, 8)], 'K')))) return 'yagura';
   // 雁木: ６七銀と５七銀（または４七銀）
-  if (mine(b[view(6, 7)], 'S') && (mine(b[view(5, 7)], 'S') || mine(b[view(4, 7)], 'S'))) return 'gangi';
-  if (myRookPawn5 && oppRookPawn5) return 'aigakari';
+  if (boards.some((b) => mine(b[view(6, 7)], 'S') && (mine(b[view(5, 7)], 'S') || mine(b[view(4, 7)], 'S')))) return 'gangi';
+  if (aigakari) return 'aigakari';
   return 'ibisha';
 }
 
