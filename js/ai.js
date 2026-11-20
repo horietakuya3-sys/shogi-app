@@ -5,17 +5,18 @@ import { josekiMoves, josekiShapeMoves } from './joseki.js';
 
 // レベルごとの設定
 // nodes: 探索量 / mpv: 比べる候補の数 / tol: 許す評価値の損（これ以内の手からランダムに選ぶ）
+// 弱さは主に読みの浅さで出す。許す損が大きいと、持久戦で意味のない手を続けて評価値を下げすぎるので小さめにしている（v23）
 export const LEVELS = [
   null,
-  { name: 'Lv1 入門', nodes: 1500, mpv: 10, tol: 900 },
-  { name: 'Lv2', nodes: 3000, mpv: 10, tol: 650 },
-  { name: 'Lv3', nodes: 6000, mpv: 8, tol: 480 },
-  { name: 'Lv4', nodes: 12000, mpv: 8, tol: 350 },
-  { name: 'Lv5', nodes: 25000, mpv: 7, tol: 250 },
-  { name: 'Lv6', nodes: 50000, mpv: 6, tol: 170 },
-  { name: 'Lv7', nodes: 100000, mpv: 5, tol: 110 },
-  { name: 'Lv8', nodes: 300000, mpv: 4, tol: 60 },
-  { name: 'Lv9', nodes: 1000000, mpv: 3, tol: 25 },
+  { name: 'Lv1 入門', nodes: 1500, mpv: 10, tol: 300 },
+  { name: 'Lv2', nodes: 3000, mpv: 10, tol: 220 },
+  { name: 'Lv3', nodes: 6000, mpv: 8, tol: 160 },
+  { name: 'Lv4', nodes: 12000, mpv: 8, tol: 120 },
+  { name: 'Lv5', nodes: 25000, mpv: 7, tol: 90 },
+  { name: 'Lv6', nodes: 50000, mpv: 6, tol: 70 },
+  { name: 'Lv7', nodes: 100000, mpv: 5, tol: 50 },
+  { name: 'Lv8', nodes: 300000, mpv: 4, tol: 35 },
+  { name: 'Lv9', nodes: 1000000, mpv: 3, tol: 20 },
   { name: 'Lv10 最強', nodes: 0, mpv: 1, tol: 0 },
 ];
 

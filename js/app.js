@@ -464,14 +464,17 @@ function loadPlayCfg() {
   try { return JSON.parse(localStorage.getItem(PLAYCFG_KEY)) || null; } catch { return null; }
 }
 
+// 対局の設定。行は「対局者1」「対局者2」で、どちらが先手かは上の先手・後手・振り駒のボタンで決める
+let p1First = true;
 function setupPlaySheet() {
-  const cfg = loadPlayCfg() || {
-    players: [{ type: 'human', level: 5, strategy: 'auto', castle: 'auto' }, { type: 'ai', level: 5, strategy: 'auto', castle: 'auto' }],
-    main: 600, byo: 30,
-  };
+  const saved = loadPlayCfg();
+  const def = { type: 'human', level: 5, strategy: 'auto', castle: 'auto' };
+  let pl = [def, { ...def, type: 'ai' }];
+  p1First = true;
+  if (saved && saved.pl) { pl = saved.pl; p1First = saved.p1First !== false; }
+  else if (saved && saved.players) pl = saved.players; // 前の版の形（先手・後手の順）
   document.querySelectorAll('.side-cfg').forEach((row) => {
-    const side = Number(row.dataset.side);
-    const p = cfg.players[side];
+    const p = pl[Number(row.dataset.player)] || def;
     const lv = row.querySelector('.p-level');
     const st = row.querySelector('.p-strategy');
     const ty = row.querySelector('.p-type');
@@ -491,68 +494,46 @@ function setupPlaySheet() {
       for (const o of ca.options) o.disabled = o.value !== 'auto' && !castleFits(st.value, o.value);
       if (ca.selectedOptions[0] && ca.selectedOptions[0].disabled) ca.value = 'auto';
     };
-    ty.onchange = () => { sync(); markTurnPick(); };
+    ty.onchange = sync;
     st.onchange = sync;
     sync();
   });
-  $('selMain').value = String(cfg.main);
-  $('selByo').value = String(cfg.byo);
+  $('selMain').value = String((saved && saved.main) ?? 600);
+  $('selByo').value = String((saved && saved.byo) ?? 30);
   $('furiResult').textContent = '';
   markTurnPick();
   document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => {
     b.onclick = () => {
-      let side = b.dataset.turn;
-      if (side === 'furi') {
-        // 振り駒: 歩を5枚振って、歩が多ければ先手
+      if (b.dataset.turn === 'furi') {
+        // 振り駒: 歩を5枚振って、歩が3枚以上なら対局者1が先手
         const fu = Array.from({ length: 5 }, () => Math.random() < 0.5).filter(Boolean).length;
-        side = fu >= 3 ? 0 : 1;
-        $('furiResult').textContent = `振り駒の結果：歩が${fu}枚、と金が${5 - fu}枚で、あなたは${side === 0 ? '先手' : '後手'}`;
+        p1First = fu >= 3;
+        $('furiResult').textContent = `振り駒の結果：歩が${fu}枚、と金が${5 - fu}枚で、対局者1が${p1First ? '先手' : '後手'}`;
       } else {
-        side = Number(side);
+        p1First = b.dataset.turn === '0';
         $('furiResult').textContent = '';
       }
-      setHumanSide(side);
+      markTurnPick();
     };
   });
 }
 
-// 人の手番を side にし、反対側をAIにする。AIの設定（レベル・戦法・囲い）は今AIになっている側から引き継ぐ
-function setHumanSide(side) {
-  const rows = [...document.querySelectorAll('.side-cfg')].sort((a, b) => a.dataset.side - b.dataset.side);
-  const read = (r) => ({ type: r.querySelector('.p-type').value, level: r.querySelector('.p-level').value, strategy: r.querySelector('.p-strategy').value, castle: r.querySelector('.p-castle').value });
-  const cur = rows.map(read);
-  const aiCfg = cur[1 - side].type === 'ai' ? cur[1 - side] : cur[side].type === 'ai' ? cur[side] : cur[1 - side];
-  const write = (r, v, type) => {
-    r.querySelector('.p-type').value = type;
-    r.querySelector('.p-level').value = v.level;
-    r.querySelector('.p-strategy').value = v.strategy;
-    r.querySelector('.p-strategy').onchange();
-    r.querySelector('.p-castle').value = v.castle;
-    r.querySelector('.p-type').onchange();
-  };
-  write(rows[1 - side], aiCfg, 'ai');
-  write(rows[side], cur[side], 'human');
-  markTurnPick();
-}
-
-// 先手・後手のボタンを、今の設定に合わせて光らせる
 function markTurnPick() {
-  const types = [...document.querySelectorAll('.side-cfg')].sort((a, b) => a.dataset.side - b.dataset.side).map((r) => r.querySelector('.p-type').value);
-  const human = types[0] === 'human' && types[1] === 'ai' ? 0 : types[1] === 'human' && types[0] === 'ai' ? 1 : null;
-  document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => b.classList.toggle('on', b.dataset.turn === String(human)));
+  document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => b.classList.toggle('on', b.dataset.turn === (p1First ? '0' : '1')));
 }
 
 function readPlaySheet() {
-  const players = [];
+  const pl = [];
   document.querySelectorAll('.side-cfg').forEach((row) => {
-    players[Number(row.dataset.side)] = {
+    pl[Number(row.dataset.player)] = {
       type: row.querySelector('.p-type').value,
       level: Number(row.querySelector('.p-level').value),
       strategy: row.querySelector('.p-strategy').value,
       castle: row.querySelector('.p-castle').value,
     };
   });
-  const cfg = { players, main: Number($('selMain').value), byo: Number($('selByo').value) };
+  const players = p1First ? [pl[0], pl[1]] : [pl[1], pl[0]]; // 先手・後手の順
+  const cfg = { pl, p1First, players, main: Number($('selMain').value), byo: Number($('selByo').value) };
   try { localStorage.setItem(PLAYCFG_KEY, JSON.stringify(cfg)); } catch { /* 無視 */ }
   return cfg;
 }
@@ -1694,7 +1675,7 @@ function restore() {
       state.sound = s.sound !== false;
       state.clockSound = s.clockSound !== false;
       state.speech = !!s.speech;
-      state.speechStyle = s.speechStyle === 'kanji' ? 'kanji' : 'kana';
+      state.speechStyle = 'kana';
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
@@ -1780,15 +1761,6 @@ function bindUi() {
   $('chkSpeech').onchange = (e) => {
     state.speech = e.target.checked;
     persist();
-  };
-  $('selSpeechStyle').value = state.speechStyle;
-  $('selSpeechStyle').onchange = (e) => {
-    state.speechStyle = e.target.value;
-    persist();
-    // 聞き比べられるように例を読む
-    const p = new Position();
-    const mv = usiToMove('6i7h');
-    speak(moveReading(p, mv, null, state.speechStyle));
   };
   $('chkClockSound').checked = state.clockSound;
   $('chkClockSound').onchange = (e) => { state.clockSound = e.target.checked; persist(); if (state.clockSound) beep(false); };

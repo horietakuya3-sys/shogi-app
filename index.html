@@ -129,13 +129,6 @@
     </div>
     <label class="row check inplay"><span>駒音</span><input type="checkbox" id="chkSound" checked></label>
     <label class="row check inplay"><span>指し手の読み上げ（対局中のみ）</span><input type="checkbox" id="chkSpeech"></label>
-    <div class="row inplay">
-      <span>読み方</span>
-      <select id="selSpeechStyle">
-        <option value="kana">かな（ナナハチきん）</option>
-        <option value="kanji">符号のまま（７八金）</option>
-      </select>
-    </div>
     <label class="row check inplay"><span>時計の音（持ち時間は残り10分から1分ごと、秒読みは残り30秒と10秒から）</span><input type="checkbox" id="chkClockSound" checked></label>
     <button data-act="newGame">新しい盤（平手）</button>
     <button data-act="terms">利用規約・ライセンス</button>
@@ -148,7 +141,7 @@
   <div class="sheet-inner form">
     <div class="sheet-title">対局の設定</div>
     <div class="row turn-pick">
-      <span>あなたは</span>
+      <span>対局者1は</span>
       <div class="seg">
         <button type="button" data-turn="0">先手</button>
         <button type="button" data-turn="1">後手</button>
@@ -156,15 +149,15 @@
       </div>
     </div>
     <div class="pf-sub" id="furiResult"></div>
-    <div class="side-cfg" data-side="0">
-      <div class="side-name">☗ 先手</div>
+    <div class="side-cfg" data-player="0">
+      <div class="side-name">対局者1</div>
       <select class="p-type"><option value="human">人</option><option value="ai">AI</option></select>
       <select class="p-level"></select>
       <select class="p-strategy"></select>
       <select class="p-castle"></select>
     </div>
-    <div class="side-cfg" data-side="1">
-      <div class="side-name">☖ 後手</div>
+    <div class="side-cfg" data-player="1">
+      <div class="side-name">対局者2</div>
       <select class="p-type"><option value="human">人</option><option value="ai" selected>AI</option></select>
       <select class="p-level"></select>
       <select class="p-strategy"></select>
