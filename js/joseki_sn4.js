@@ -1,0 +1,23 @@
+// shoginote.com（将棋ノート）のゴキゲン中飛車（対超速・丸山ワクチン・相穴熊・超急戦・基本）と横歩取り青野流の手順を参考にした人の定跡（v32。合法手を確かめ、エンジンで最善から250を超えて損する手があればその前で切ってある）
+export const SN4_LINES = [
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（銀対抗）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 3a4b 4h3g 4b5c 3g4f 5c4d 6h7h 5a6b 4i5h 6b7b 7i6h 7b8b 6h7g 7a7b 7g6f 4a3b' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（３筋の攻めをさばく）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 3a4b 4h3g 4b5c 3g4f 5c4d 6h7h 5a6b 4i5h 6b7b 7i6h 7b8b 2h3h 7a7b 3f3e 3d3e 4f3e 4d3e 3h3e 3c4d 3e3f 5b3b 3f3b+ 4a3b R*4a R*3a' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（菅井流・７七銀から角交換を避ける）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 5a6b 4h3g 4c4d 7i7h 3a3b 7h7g 3b4c 7g6f 4c5d 3f3e 3d3e 3g4f 4d4e 4f3e' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（菅井流・４五歩で銀を呼び込む）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 5a6b 4h3g 4c4d 3g4f 4d4e 4f4e 4a3b 4e3d 5e5f' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（早い５六歩に角交換）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 5a6b 4h3g 5e5f 5g5f 5b5f 8h3c+ 2a3c B*6e 5f5c 6e8c+' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（早い５六歩に５七銀）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 5e5f 5g5f 5b5f 4h5g 5f5d 8h3c+ 2a3c P*5e 5d4d 5g4f' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 超速（３七銀がないと５五角）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 3g3f 5e5f 5g5f 5b5f 8h3c+ 2a3c B*6e 5f5c' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 丸山ワクチン', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 8h2b+ 3a2b 7i7h 5a6b 3i4h 6b7b 5i6h 2b3c 4g4f 7b8b 4h4g 7a7b 6h7i 5b2b 4i5h 4a3b 7i8h 2c2d 2e2d 3c2d' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 相穴熊（角頭を攻める）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 6h7h 5a6b 4i5h 6b7b 8h7g 3a4b 7h8h 7b8b 6g6f 4b5c 9i9h 5c6d 8h9i 7c7d 5h6g 5b7b 7i8h 7d7e 7f7e 6d7e 6i7i 9a9b 3g3f 8b9a 4h3g 7a8b 9g9f P*7f 7g5i 5e5f 5g5f 7e6f' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 相穴熊（一直線穴熊・角の引き場所）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 6h7h 5a6b 4i5h 6b7b 8h7g 3a4b 7h8h 7b8b 6g6f 4b5c 9i9h 5c6d 8h9i 7c7d 5h6g 5b7b 6i7h 7d7e 7f7e 6d7e 4h5i 9a9b 5i6h P*7f 7g8h 8b9a' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 ５八金右超急戦（△６二玉）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 4i5h 5d5e 2e2d 2c2d 2h2d 5e5f 5g5f 2b8h+ 7i8h B*3c 2d2a+ 3c8h+ N*5e 5a6b 2a1a 8h9i L*3c S*2b 3c3a+ 2b1a 3a4a' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 ５八金右超急戦（△３二金で受ける）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 4i5h 5d5e 2e2d 2c2d 2h2d' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 早い角交換', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 8h2b+ 5b2b B*5c B*4b' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 対 早い２筋交換', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 銀と角で５筋を攻める（▲同銀）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 6h7h 5a6b 4i5h 6b7b 3g3f 7b8b 9g9f 9c9d 4h3g 7a7b 7i6h 3a4b 1g1f 4b5c 1f1e 5c5d 3g2f 5d6e' },
+  { s: 'ibisha', g: 'naka', note: 'ゴキゲン中飛車 銀と角で５筋を攻める（▲３九飛）', moves: '7g7f 3c3d 2g2f 5c5d 2f2e 8b5b 3i4h 5d5e 5i6h 2b3c 6h7h 5a6b 4i5h 6b7b 3g3f 7b8b 9g9f 9c9d 4h3g 7a7b 7i6h 3a4b 1g1f 4b5c 1f1e 5c5d 3g2f 5d6e 2i3g 5e5f 5g5f 3c8h+ 7h8h 6e5f P*5g B*3i' },
+  { s: 'yokofu', g: 'yokofu', note: '横歩取り青野流（主線）', moves: '7g7f 3c3d 2g2f 8c8d 2f2e 8d8e 6i7h 4a3b 2e2d 2c2d 2h2d 8e8f 8g8f 8b8f 2d3d 2b3c 5i5h 3a2b 3g3f 8f8b 2i3g 3c8h+ 7i8h 2b3c P*8c 8b8c P*8d 8c8b 3d3e 8b8d B*6f 8d6d 8i7g P*3d 3e8e P*8d 8e2e P*2d 2e6e B*5d 6f3c+ 2a3c 6e6d 6c6d R*2a 5a6b 2a1a+' },
+  { s: 'yokofu', g: 'yokofu', note: '横歩取り青野流（飛車交換に応じたら）', moves: '7g7f 3c3d 2g2f 8c8d 2f2e 8d8e 6i7h 4a3b 2e2d 2c2d 2h2d 8e8f 8g8f 8b8f 2d3d 2b3c 5i5h 3a2b 3g3f 8f8b 2i3g 3c8h+ 7i8h 2b3c P*8c 8b8c P*8d 8c8b 3d3e 8b8d B*6f 8d6d 8i7g P*3d 3e8e P*8d 8e2e P*2d 2e6e' },
+  { s: 'yokofu', g: 'yokofu', note: '横歩取り青野流（早い角交換と５五角）', moves: '7g7f 3c3d 2g2f 8c8d 2f2e 8d8e 6i7h 4a3b 2e2d 2c2d 2h2d 8e8f 8g8f 8b8f 2d3d 2b3c 5i5h 5a5b 3g3f 8f7f 8h7g 3c7g+ 8i7g B*5e P*2b 5e2b 7i6h' },
+  { s: 'yokofu', g: 'yokofu', note: '横歩取り青野流（３三桂ならと金と歩を使う）', moves: '7g7f 3c3d 2g2f 8c8d 2f2e 8d8e 6i7h 4a3b 2e2d 2c2d 2h2d 8e8f 8g8f 8b8f 2d3d 2b3c 5i5h 5a5b 3g3f 8f7f 8h7g 3c7g+ 8i7g B*5e P*2b 2a3c 2b2a+ 3a4b P*2c 3b2c 3d8d P*8b P*2d' },
+];
