@@ -3,6 +3,7 @@
 // 手順は tests でエンジンに通し、どの手も最善から大きく損していないことを確かめてある
 import { Position, moveToUsi } from './shogi.js';
 import { hashKey, shapeKey, rotSq } from './book.js';
+import { SN_LINES } from './joseki_sn.js';
 
 export const LINES = [
   // 相矢倉（24手組）
@@ -122,7 +123,7 @@ let shapes = null; // 自分の駒の形 → Map(usi → 指す側の戦法の�
 function build() {
   tree = new Map();
   shapes = new Map();
-  for (const line of LINES) {
+  for (const line of [...LINES, ...SN_LINES]) {
     const pos = new Position();
     for (const u of line.moves.split(' ')) {
       const mv = pos.legalMoves().find((m) => moveToUsi(m) === u);
