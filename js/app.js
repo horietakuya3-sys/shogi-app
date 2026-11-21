@@ -101,7 +101,7 @@ function announce(pos, mv, prevTo) {
 
 function playMove(mv) {
   if (state.mode === 'play') { playTurnMove(mv); return; }
-  if (state.mode === 'practice') { answerPractice(mv); return; }
+  if (state.mode === 'practice' && !exploring()) { answerPractice(mv); return; }
   sound();
 
   const ln = line();
@@ -125,7 +125,7 @@ function playMove(mv) {
 }
 
 function goTo(n) {
-  if (state.mode === 'play' || state.mode === 'practice') return;
+  if (state.mode === 'play' || (state.mode === 'practice' && !exploring())) return;
   state.review.manualAt = Date.now(); // 局後解析中に自分で動かしたら、しばらく盤を解析に合わせない
   const max = line().length;
   state.cursor = Math.max(0, Math.min(max, n));
@@ -304,7 +304,7 @@ function renderControls() {
   const cm = n > 0 ? ln[n - 1].comment : '';
   $('comment').textContent = cm || '';
   $('comment').classList.toggle('hidden', !cm);
-  const playing = state.mode === 'play' || state.mode === 'practice';
+  const playing = state.mode === 'play' || (state.mode === 'practice' && !exploring());
   for (const id of ['btnFirst', 'btnPrev', 'btnNext', 'btnLast']) $(id).disabled = playing;
 }
 
@@ -424,7 +424,7 @@ function aiThinkingTurn() {
 
 function requestAnalysis() {
   if (!state.engineReady) return;
-  if (state.mode === 'practice') return; // 復習中は答えが見えないようにエンジンを止めておく
+  if (state.mode === 'practice' && !exploring()) return; // 復習中は答えが見えないようにエンジンを止めておく（定跡の勉強で検討しているときは解析する）
   if (aiThinkingTurn()) {
     state.candidates = [];
     renderArrows();
@@ -698,8 +698,11 @@ function clockCall(sec) {
   beep(sec <= 3);
 }
 
+// 定跡の勉強で、答えたあとの局面から自由に指して検討している
+function exploring() { return state.mode === 'practice' && state.practice && state.practice.phase === 'explore'; }
+
 function canHumanMove() {
-  if (state.mode === 'practice') return state.practice && state.practice.phase === 'ask';
+  if (state.mode === 'practice') return state.practice && (state.practice.phase === 'ask' || state.practice.phase === 'explore');
   if (state.mode !== 'play') return true;
   const p = state.play;
   return !p.over && p.players[curPos().turn].type === 'human';
@@ -1751,6 +1754,7 @@ function josekiAsk(k) {
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeNext').classList.add('hidden');
   $('btnPracticeRetry').classList.add('hidden');
+  $('btnPracticeExplore').classList.add('hidden');
   renderCandidates([], '盤上で指してください');
   update();
 }
@@ -1822,7 +1826,7 @@ async function josekiAnswer(mv) {
     if (pr.ext) pr.moves = pr.moves.slice(0, k).concat([u]);
     $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}`;
     $('btnPracticeShow').classList.add('hidden');
-    $('btnPracticeRetry').classList.add('hidden');
+    $('btnPracticeRetry').classList.remove('hidden');
     $('btnPracticeNext').classList.remove('hidden');
   } else {
     const why = pr.ext ? `最善との差が${EXT_PASS}を超えています` : `この${josekiWord()}の手ではありません`;
@@ -1832,11 +1836,61 @@ async function josekiAnswer(mv) {
     $('btnPracticeNext').classList.add('hidden');
   }
   pr.first = false;
+  josekiDoneButtons();
   revealCandidates(pos, lines.slice(0, 3)); // 定跡の勉強では候補手は3つまで（ボタンが画面に収まるように）
+}
+
+// 答えたあと（正解でも間違いでも、答えを見たあとでも）：もう一度・この先を検討を出す
+function josekiDoneButtons() {
+  $('btnPracticeRetry').classList.remove('hidden');
+  $('btnPracticeExplore').classList.remove('hidden');
+  $('btnPracticeExplore').textContent = '検討';
+}
+
+// 検討：いまの盤（指した手、または答え）から両方の手を自由に指し、解析を見る。「問題に戻る」で元に戻る
+function josekiExplore() {
+  const pr = state.practice;
+  if (pr.phase === 'explore') { josekiExploreEnd(); return; }
+  pr.beforeExplore = {
+    phase: pr.phase, info: $('practiceInfo').textContent, game: state.game, cursor: state.cursor,
+    show: ['btnPracticeShow', 'btnPracticeRetry', 'btnPracticeNext'].filter((id) => !$(id).classList.contains('hidden')),
+  };
+  state.game = { ...state.game, moves: state.game.moves.slice(0, state.cursor) };
+  state.branch = null;
+  pr.phase = 'explore';
+  // 検討のあいだは解析をつける（終わったら元に戻す）
+  pr.beforeExplore.analyze = state.analyze;
+  state.analyze = true;
+  $('btnEngine').classList.add('on');
+  for (const id of ['btnPracticeShow', 'btnPracticeRetry', 'btnPracticeNext']) $(id).classList.add('hidden');
+  $('btnPracticeExplore').textContent = '問題に戻る';
+  $('practiceInfo').textContent = `${josekiHead()}　検討中：両方の手を自由に指せます。◀▶で戻ったり進んだりでき、候補手と評価値が出ます`;
+  update();
+  requestAnalysis();
+}
+
+function josekiExploreEnd() {
+  const pr = state.practice;
+  const b = pr.beforeExplore;
+  engine.stop();
+  pr.phase = b.phase;
+  state.analyze = b.analyze;
+  $('btnEngine').classList.toggle('on', state.analyze);
+  state.game = b.game;
+  state.cursor = b.cursor;
+  state.branch = null;
+  state.selected = null;
+  state.candidates = [];
+  $('practiceInfo').textContent = b.info;
+  for (const id of ['btnPracticeShow', 'btnPracticeRetry', 'btnPracticeNext']) $(id).classList.toggle('hidden', !b.show.includes(id));
+  $('btnPracticeExplore').textContent = '検討';
+  update();
+  if (pr.lines) revealCandidates(josekiPos(pr.k), pr.lines.slice(0, 3));
 }
 
 function josekiRetry() {
   const pr = state.practice;
+  pr.beforeExplore = null;
   pr.phase = 'ask';
   josekiSetBoard(pr.k);
   const pos = josekiPos(pr.k);
@@ -1845,6 +1899,7 @@ function josekiRetry() {
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeRetry').classList.add('hidden');
   $('btnPracticeNext').classList.add('hidden');
+  $('btnPracticeExplore').classList.add('hidden');
   renderCandidates([], '盤上で指してください（やり直し）');
   update();
 }
@@ -1875,6 +1930,7 @@ async function josekiShow() {
     $('practiceInfo').textContent = `${josekiHead()}　${josekiWord()}は ${moveToJa(pos, usiToMove(pr.moves[k]), prevTo)} です`;
   }
   $('btnPracticeNext').classList.remove('hidden');
+  josekiDoneButtons();
   update();
   if (!lines) {
     const res = pr.lines ? { lines: pr.lines } : await pr.judge;
@@ -1891,6 +1947,7 @@ function endPractice() {
   state.mode = 'study';
   engine.stop();
   $('practiceBar').classList.add('hidden');
+  $('btnPracticeExplore').classList.add('hidden');
   const sv = state.saved;
   if (sv) {
     state.game = sv.game; state.branch = sv.branch; state.cursor = sv.cursor; state.flipped = sv.flipped;
@@ -2174,6 +2231,7 @@ function bindUi() {
   $('btnPracticeNext').onclick = () => nextPractice();
   $('btnPracticeRetry').onclick = () => retryPractice();
   $('btnPracticeEnd').onclick = () => endPractice();
+  $('btnPracticeExplore').onclick = () => josekiExplore();
 
   // 局後解析
   $('btnReviewStop').onclick = stopReview;
@@ -2322,6 +2380,7 @@ function handleBack() {
     else el.classList.add('hidden');
     return true;
   }
+  if (exploring()) { josekiExploreEnd(); return true; }
   if (state.mode === 'practice') {
     const joseki = state.practice && state.practice.type === 'joseki';
     endPractice();
