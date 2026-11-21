@@ -51,23 +51,52 @@ if (deviceSpeechSupported()) {
   speechSynthesis.addEventListener && speechSynthesis.addEventListener('voiceschanged', pickVoice);
 }
 
-// 読み上げの途中で次の手が指されても切らずに、順に読む（端末の音声は speak を重ねると順に読む）
-function speakDevice(text) {
-  if (!deviceSpeechSupported()) return;
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'ja-JP';
-  if (voice || pickVoice()) u.voice = voice;
-  u.rate = 1.05;
-  speechSynthesis.speak(u);
+// 端末の音声で読み、読み終わったら解決する
+function deviceSay(text) {
+  return new Promise((res) => {
+    if (!deviceSpeechSupported()) { res(); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ja-JP';
+    if (voice || pickVoice()) u.voice = voice;
+    u.rate = 1.05;
+    let done = false;
+    const fin = () => { if (!done) { done = true; res(); } };
+    u.onend = fin;
+    u.onerror = fin;
+    setTimeout(fin, 1500 + text.length * 250); // onend が来ない端末のため
+    speechSynthesis.speak(u);
+  });
 }
-export const speak = (text) => { speakDevice(text); };
 
-// いま何かを読み上げているか（前もって作った音声・端末の音声のどちらでも）
-export function speaking() {
-  const ac = endAt > 0 ? audio() : null;
-  if (ac && endAt > ac.currentTime) return true;
-  return deviceSpeechSupported() && (speechSynthesis.speaking || speechSynthesis.pending);
+// ---- 読み上げの順番待ち ----
+// 読み上げの途中で次の手が指されても切らずに、順に読む。
+// ただし、まだ読んでいない手が3手以上たまったら、古い手を飛ばして新しい2手だけ残す
+const MAX_WAITING_MOVES = 2;
+const READ_GAP = 0.25; // 続けて読むときの、前の読み上げとの間（秒）
+const waiting = []; // { kind: 'move' | 'clock' | 'end', play: () => Promise }
+let reading = false;
+function enqueue(kind, play) {
+  if (kind === 'move') {
+    const ms = waiting.filter((x) => x.kind === 'move');
+    while (ms.length >= MAX_WAITING_MOVES) waiting.splice(waiting.indexOf(ms.shift()), 1);
+  }
+  waiting.push({ kind, play });
+  pump();
 }
+async function pump() {
+  if (reading) return;
+  const it = waiting.shift();
+  if (!it) return;
+  reading = true;
+  try { await it.play(); } catch { /* 次へ */ }
+  if (waiting.length) await new Promise((r) => setTimeout(r, READ_GAP * 1000));
+  reading = false;
+  pump();
+}
+export const speak = (text) => enqueue('end', () => deviceSay(text));
+
+// いま何かを読み上げているか、読み上げ待ちがあるか
+export const speaking = () => reading || waiting.length > 0;
 
 // ---- 前もって作った音声 ----
 export const VOICES = {
@@ -125,23 +154,14 @@ async function clip(key) {
   return b;
 }
 
-let endAt = 0; // いま並んでいる音が鳴り終わる時刻（AudioContext の時計）
-let chain = Promise.resolve();
-const READ_GAP = 0.25; // 続けて読むときの、前の読み上げとの間
-
-// parts: [[キー, 前の間（秒。負なら前の音に少し重ねる）], ...]。音がそろわなければ false
-// 前の読み上げが終わっていなければ、その後ろに並べる（途中で切らない）
-function playClips(parts) {
-  const run = chain.then(() => playClipsNow(parts));
-  chain = run.catch(() => false);
-  return run;
-}
+// parts: [[キー, 前の間（秒。負なら前の音に少し重ねる）], ...]。鳴らし終わったら true、音がそろわなければ false
 async function playClipsNow(parts) {
   let bufs;
   try { bufs = await Promise.all(parts.map(([k]) => clip(k))); } catch { return false; }
   if (bufs.some((b) => !b)) return false;
   const ac = audio();
-  let t = Math.max(ac.currentTime + 0.03, endAt > ac.currentTime ? endAt + READ_GAP : 0);
+  const t0 = ac.currentTime + 0.03;
+  let t = t0;
   bufs.forEach((b, i) => {
     t = Math.max(ac.currentTime + 0.03, t + parts[i][1]);
     const src = ac.createBufferSource();
@@ -150,9 +170,12 @@ async function playClipsNow(parts) {
     src.start(t);
     t += b.duration;
   });
-  endAt = t;
+  await new Promise((r) => setTimeout(r, (t - ac.currentTime) * 1000 + 30));
   return true;
 }
+
+// 前もって作った音声で読む。音がそろわなければ端末の音声で
+const clipsOr = (parts, text) => async () => { if (!(await playClipsNow(parts))) await deviceSay(text); };
 
 const usePack = () => voiceName !== 'device' && voiceReady();
 const SIDE_GAP = 0.12; // 「せんて」のあとの間
@@ -181,22 +204,20 @@ export function moveClips(pos, mv, prevTo) {
 export function speakMove(pos, mv, prevTo, style = 'kana') {
   if (usePack()) {
     const parts = moveClips(pos, mv, prevTo);
-    if (parts) {
-      playClips(parts).then((ok) => { if (!ok) speakDevice(moveReading(pos, mv, prevTo, style)); });
-      return;
-    }
+    if (parts) { enqueue('move', clipsOr(parts, moveReading(pos, mv, prevTo, style))); return; }
   }
-  speak(moveReading(pos, mv, prevTo, style));
+  const text = moveReading(pos, mv, prevTo, style);
+  enqueue('move', () => deviceSay(text));
 }
 
 // dropIfBusy: 読み上げ中なら読まない（秒読みの数字は遅れて読むと意味がないので）
 export function speakClock(sec, text, { dropIfBusy = false } = {}) {
   if (dropIfBusy && speaking()) return;
   if (usePack() && pack.index[`clk|${sec}`]) {
-    playClips([[`clk|${sec}`, 0]]).then((ok) => { if (!ok) speakDevice(text); });
+    enqueue('clock', clipsOr([[`clk|${sec}`, 0]], text));
     return;
   }
-  speak(text);
+  enqueue('clock', () => deviceSay(text));
 }
 
 // 終局: 「つみ。まで85手で先手の勝ち」
@@ -204,7 +225,7 @@ export function speakClock(sec, text, { dropIfBusy = false } = {}) {
 export function speakEnd(word, n, tail, text) {
   const parts = [[`end|${word}`, 0], [`made|${n}`, 0.15], [`tail|${tail}`, -0.04]];
   if (usePack() && parts.every(([k]) => pack.index[k])) {
-    playClips(parts).then((ok) => { if (!ok) speakDevice(text); });
+    enqueue('end', clipsOr(parts, text));
     return;
   }
   speak(text);
