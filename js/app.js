@@ -483,14 +483,15 @@ function loadPlayCfg() {
   try { return JSON.parse(localStorage.getItem(PLAYCFG_KEY)) || null; } catch { return null; }
 }
 
-// 対局の設定。行は「対局者1」「対局者2」で、どちらが先手かは上の先手・後手・振り駒のボタンで決める
-let p1First = true;
+// 対局の設定。行は「対局者1」「対局者2」で、どちらが先手かは上の先手・後手・ランダムのボタンで決める
+// turnPick: '0' 対局者1が先手、'1' 対局者1が後手、'rand' 対局を始めたときにランダムで決める
+let turnPick = '0';
 function setupPlaySheet() {
   const saved = loadPlayCfg();
   const def = { type: 'human', level: 5, strategy: 'auto', castle: 'auto' };
   let pl = [def, { ...def, type: 'ai' }];
-  p1First = true;
-  if (saved && saved.pl) { pl = saved.pl; p1First = saved.p1First !== false; }
+  turnPick = '0';
+  if (saved && saved.pl) { pl = saved.pl; turnPick = saved.turn || (saved.p1First === false ? '1' : '0'); }
   else if (saved && saved.players) pl = saved.players; // 前の版の形（先手・後手の順）
   document.querySelectorAll('.side-cfg').forEach((row) => {
     const p = pl[Number(row.dataset.player)] || def;
@@ -519,26 +520,15 @@ function setupPlaySheet() {
   });
   $('selMain').value = String((saved && saved.main) ?? 600);
   $('selByo').value = String((saved && saved.byo) ?? 30);
-  $('furiResult').textContent = '';
   markTurnPick();
   document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => {
-    b.onclick = () => {
-      if (b.dataset.turn === 'furi') {
-        // 振り駒: 歩を5枚振って、歩が3枚以上なら対局者1が先手
-        const fu = Array.from({ length: 5 }, () => Math.random() < 0.5).filter(Boolean).length;
-        p1First = fu >= 3;
-        $('furiResult').textContent = `振り駒の結果：歩が${fu}枚、と金が${5 - fu}枚で、対局者1が${p1First ? '先手' : '後手'}`;
-      } else {
-        p1First = b.dataset.turn === '0';
-        $('furiResult').textContent = '';
-      }
-      markTurnPick();
-    };
+    b.onclick = () => { turnPick = b.dataset.turn; markTurnPick(); };
   });
 }
 
 function markTurnPick() {
-  document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => b.classList.toggle('on', b.dataset.turn === (p1First ? '0' : '1')));
+  document.querySelectorAll('.turn-pick [data-turn]').forEach((b) => b.classList.toggle('on', b.dataset.turn === turnPick));
+  $('furiResult').textContent = turnPick === 'rand' ? '対局を始めたときに、どちらが先手かをランダムで決めます' : '';
 }
 
 function readPlaySheet() {
@@ -551,8 +541,10 @@ function readPlaySheet() {
       castle: row.querySelector('.p-castle').value,
     };
   });
+  const p1First = turnPick === 'rand' ? Math.random() < 0.5 : turnPick === '0';
+  if (turnPick === 'rand') toast(`ランダムで、対局者1が${p1First ? '先手' : '後手'}になりました`, 3500);
   const players = p1First ? [pl[0], pl[1]] : [pl[1], pl[0]]; // 先手・後手の順
-  const cfg = { pl, p1First, players, main: Number($('selMain').value), byo: Number($('selByo').value) };
+  const cfg = { pl, turn: turnPick, players, main: Number($('selMain').value), byo: Number($('selByo').value) };
   try { localStorage.setItem(PLAYCFG_KEY, JSON.stringify(cfg)); } catch { /* 無視 */ }
   return cfg;
 }
@@ -1806,33 +1798,31 @@ async function josekiAnswer(mv) {
   const loss = myV == null ? null : Math.max(0, bestV - myV);
   const isLine = !pr.ext && u === pr.moves[k];
   const isOther = !pr.ext && !isLine && !pr.line.fromGame && anyJosekiMoves(pos).includes(u);
-  let label;
-  if (isLine) label = `${josekiWord()}の手`;
-  else if (isOther) label = '別の定跡の手';
-  else if (rank === 0) label = pr.ext ? '最善手' : `最善手（この${josekiWord()}とは別の手）`;
-  else if (rank === 1) label = '次善手';
-  else if (loss != null && loss <= 50) label = '互角に近い手';
-  else if (loss != null && loss <= 150) label = 'やや損な手';
-  else if (loss != null && loss <= 300) label = '疑問手';
-  else label = '悪手';
+  // 何の手か（定跡・最善・次善…）と、最善との差を言葉で出す
+  const kind = (r, l) => (r === 0 || l === 0 ? '最善手' : r === 1 ? '次善手' : l != null && l <= 50 ? '互角に近い手'
+    : l != null && l <= 150 ? 'やや損な手' : l != null && l <= 300 ? '疑問手' : '悪手');
   const myJa = moveToJa(pos, mv, prevTo);
-  const lossText = loss == null ? '' : loss === 0 ? '（評価値は最善と同じ）' : `（最善との差 ${loss}）`;
+  const bestJa = lines.length ? moveToJa(pos, usiToMove(lines[0].pv[0]), prevTo) : '';
+  const isBest = rank === 0 || loss === 0;
+  const diff = loss == null ? '' : `最善の${bestJa}とは評価値で${loss}の差`;
   if (pr.first) pr.asked++;
   pr.lines = lines;
   pr.phase = 'done';
-  const ok = pr.ext ? rank === 0 || (loss != null && loss <= EXT_PASS) : isLine;
+  const ok = pr.ext ? isBest || (loss != null && loss <= EXT_PASS) : isLine;
+  let msg;
+  if (isLine) msg = isBest ? `正解！ ${myJa}は${josekiWord()}の手で、最善手です` : `正解！ ${myJa}は${josekiWord()}の手です。ただし${diff}があります`;
+  else if (pr.ext && ok) msg = isBest ? `正解！ ${myJa}は最善手です` : `正解！ ${myJa}は${kind(rank, loss)}です（${diff}）`;
+  else if (pr.ext) msg = `不正解：${myJa}は${kind(rank, loss)}です（${diff}。${EXT_PASS}を超えると不正解）。もう一度か、答えを見てください`;
+  else if (isOther) msg = `不正解：${myJa}は別の定跡の手です${isBest ? '（最善手）' : `（${diff}）`}。この定跡の手ではありません。もう一度か、答えを見てください`;
+  else msg = `不正解：${myJa}は${kind(rank, loss)}${isBest ? '' : `（${diff}）`}ですが、この${josekiWord()}の手ではありません。もう一度か、答えを見てください`;
+  $('practiceInfo').textContent = `${josekiHead()}　${msg}`;
   if (ok) {
     if (pr.first) pr.right++;
     if (pr.ext) pr.moves = pr.moves.slice(0, k).concat([u]);
-    $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}`;
     $('btnPracticeShow').classList.add('hidden');
-    $('btnPracticeRetry').classList.remove('hidden');
     $('btnPracticeNext').classList.remove('hidden');
   } else {
-    const why = pr.ext ? `最善との差が${EXT_PASS}を超えています` : `この${josekiWord()}の手ではありません`;
-    $('practiceInfo').textContent = `${josekiHead()}　${myJa}：${label}${lossText}。${why}。もう一度か、答えを見てください`;
     $('btnPracticeShow').classList.remove('hidden');
-    $('btnPracticeRetry').classList.remove('hidden');
     $('btnPracticeNext').classList.add('hidden');
   }
   pr.first = false;
@@ -1936,6 +1926,13 @@ async function josekiShow() {
     const res = pr.lines ? { lines: pr.lines } : await pr.judge;
     if (state.practice !== pr) return;
     lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
+    // 定跡の手が最善かどうかも添える
+    const r = lines.findIndex((l) => l.pv[0] === pr.moves[k]);
+    const ja = moveToJa(pos, usiToMove(pr.moves[k]), prevTo);
+    let note = '';
+    if (r === 0) note = '（最善手でもあります）';
+    else if (r > 0 && lines.length) note = `（最善の${moveToJa(pos, usiToMove(lines[0].pv[0]), prevTo)}とは評価値で${lineValue(lines[0]) - lineValue(lines[r])}の差）`;
+    $('practiceInfo').textContent = `${josekiHead()}　${josekiWord()}は ${ja} です${note}`;
   }
   revealCandidates(pos, lines.slice(0, 3));
 }
