@@ -9,7 +9,7 @@ import { loadBook, bookReady } from './book.js';
 import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
-import { moveReading, speak, speechSupported } from './speech.js';
+import { speechSupported, speakMove, speakClock, speakEnd, setVoice, loadVoice, VOICES } from './speech.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
   buildRecord, buildProblems, sideEvals, NEXT_MIN_CP, aggregate, pct, STRATEGY_NAMES, detectStrategy,
@@ -36,6 +36,7 @@ const state = {
   clockSound: true,
   speech: false,
   speechStyle: 'kana',
+  voice: 'metan', // 読み上げの声: 'metan'（VOICEVOX:四国めたん）または 'device'（端末の音声）
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -95,7 +96,7 @@ function beep(high) { try { playBeep(high); } catch { /* 無視 */ } }
 function announce(pos, mv, prevTo) {
   if (!state.speech || state.mode !== 'play') return;
   try {
-    speak(moveReading(pos, mv, prevTo, state.speechStyle === 'kanji' ? 'kanji' : 'kana'));
+    speakMove(pos, mv, prevTo, state.speechStyle === 'kanji' ? 'kanji' : 'kana');
   } catch { /* 無視 */ }
 }
 
@@ -680,12 +681,20 @@ function tickClock() {
   }
 }
 
+// 読み上げの声を用意する（四国めたんの音声は初回だけ約16MBを読み込む。読み込めるまでは端末の音声で読む）
+function prepareVoice() {
+  setVoice(state.voice);
+  if (!state.speech || state.voice === 'device') return;
+  loadVoice((v) => toast(`読み上げの音声（${v.name}、約${v.sizeMB}MB）を読み込んでいます。終わるまでは端末の音声で読みます`, 5000))
+    .then((ok) => { if (!ok && state.speech && state.voice !== 'device') toast('読み上げの音声を読み込めませんでした。端末の音声で読みます', 4000); });
+}
+
 const CLOCK_MARKS = [600, 540, 480, 420, 360, 300, 240, 180, 150, 120, 90, 60, 30, 20, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 function clockCall(sec) {
   if (state.speech && speechSupported()) {
     const m = Math.floor(sec / 60), r = sec % 60;
     const text = sec < 10 ? String(sec) : m ? `${m}分${r ? r + '秒' : ''}` : `${sec}秒`;
-    try { speak(text); return; } catch { /* 音にする */ }
+    try { speakClock(sec, text); return; } catch { /* 音にする */ }
   }
   beep(sec <= 3);
 }
@@ -797,7 +806,11 @@ function endPlay(word, winner, { record = true } = {}) {
   state.play = null;
   setTimeout(askPendingUpdate, 1500);
   $('endRating').textContent = '';
-  if (state.speech) setTimeout(() => speak(`${word === '詰み' ? 'つみ' : word}。${state.game.summary}`), 900);
+  if (state.speech) {
+    const tail = winner == null ? word : winner === SENTE ? '先手の勝ち' : '後手の勝ち';
+    const text = `${word === '詰み' ? 'つみ' : word}。${state.game.summary}`;
+    setTimeout(() => { try { speakEnd(word, n, tail, text); } catch { /* 無視 */ } }, 900);
+  }
   $('endText').textContent = (head === state.game.summary ? head : `${head}\n${state.game.summary}`)
     + (reveal ? `\n${reveal}` : '') + (record ? '' : '\n（戦績には記録していません）');
   $('endSheet').classList.remove('hidden');
@@ -2097,6 +2110,7 @@ function persist() {
       clockSound: state.clockSound,
       speech: state.speech,
       speechStyle: state.speechStyle,
+      voice: state.voice,
     }));
   } catch { /* 保存できなくても動作は続ける */ }
 }
@@ -2113,6 +2127,7 @@ function restore() {
       state.clockSound = s.clockSound !== false;
       state.speech = !!s.speech;
       state.speechStyle = 'kana';
+      state.voice = s.voice === 'device' ? 'device' : 'metan';
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
@@ -2205,6 +2220,13 @@ function bindUi() {
   $('chkSpeech').onchange = (e) => {
     state.speech = e.target.checked;
     persist();
+    prepareVoice();
+  };
+  $('selVoice').value = state.voice;
+  $('selVoice').onchange = (e) => {
+    state.voice = e.target.value;
+    persist();
+    prepareVoice();
   };
   $('chkClockSound').checked = state.clockSound;
   $('chkClockSound').onchange = (e) => { state.clockSound = e.target.checked; persist(); if (state.clockSound) beep(false); };
@@ -2437,6 +2459,7 @@ async function main() {
   checkEmbedded();
   unlockAudio();
   restore();
+  prepareVoice();
   buildBoard();
   bindUi();
   update();

@@ -144,6 +144,13 @@
     </div>
     <label class="row check"><span>駒音</span><input type="checkbox" id="chkSound" checked></label>
     <label class="row check"><span>読み上げ（対局中の指し手と残り時間）</span><input type="checkbox" id="chkSpeech"></label>
+    <div class="row">
+      <span>読み上げの声</span>
+      <select id="selVoice">
+        <option value="metan">VOICEVOX:四国めたん</option>
+        <option value="device">端末の音声</option>
+      </select>
+    </div>
     <label class="row check"><span>残り時間の知らせ（10分〜3分は1分ごと、2分30秒〜30秒は30秒ごと、20秒、10秒、あとは1秒ごと。読み上げがオンなら声で）</span><input type="checkbox" id="chkClockSound" checked></label>
     <button id="btnSettingsTerms">利用規約・ライセンス</button>
     <button id="btnSettingsClose" class="sub">閉じる</button>
