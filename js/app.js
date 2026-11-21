@@ -694,7 +694,7 @@ function clockCall(sec) {
   if (state.speech && speechSupported()) {
     const m = Math.floor(sec / 60), r = sec % 60;
     const text = sec < 10 ? String(sec) : m ? `${m}分${r ? r + '秒' : ''}` : `${sec}秒`;
-    try { speakClock(sec, text); return; } catch { /* 音にする */ }
+    try { speakClock(sec, text, { dropIfBusy: sec < 10 }); return; } catch { /* 音にする */ }
   }
   beep(sec <= 3);
 }

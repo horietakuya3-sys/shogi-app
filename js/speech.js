@@ -51,17 +51,23 @@ if (deviceSpeechSupported()) {
   speechSynthesis.addEventListener && speechSynthesis.addEventListener('voiceschanged', pickVoice);
 }
 
+// 読み上げの途中で次の手が指されても切らずに、順に読む（端末の音声は speak を重ねると順に読む）
 function speakDevice(text) {
   if (!deviceSpeechSupported()) return;
-  // 読み上げが追いつかないときは、古いものを捨てて新しい手を読む
-  if (speechSynthesis.pending || speechSynthesis.speaking) speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'ja-JP';
   if (voice || pickVoice()) u.voice = voice;
   u.rate = 1.05;
   speechSynthesis.speak(u);
 }
-export const speak = (text) => { stopClips(); speakDevice(text); };
+export const speak = (text) => { speakDevice(text); };
+
+// いま何かを読み上げているか（前もって作った音声・端末の音声のどちらでも）
+export function speaking() {
+  const ac = endAt > 0 ? audio() : null;
+  if (ac && endAt > ac.currentTime) return true;
+  return deviceSpeechSupported() && (speechSynthesis.speaking || speechSynthesis.pending);
+}
 
 // ---- 前もって作った音声 ----
 export const VOICES = {
@@ -119,35 +125,32 @@ async function clip(key) {
   return b;
 }
 
-let playing = [];
-let token = 0;
-function stopClips() {
-  token++;
-  for (const s of playing) { try { s.stop(); } catch { /* 無視 */ } }
-  playing = [];
-}
+let endAt = 0; // いま並んでいる音が鳴り終わる時刻（AudioContext の時計）
+let chain = Promise.resolve();
+const READ_GAP = 0.25; // 続けて読むときの、前の読み上げとの間
 
 // parts: [[キー, 前の間（秒。負なら前の音に少し重ねる）], ...]。音がそろわなければ false
-async function playClips(parts) {
-  const my = ++token;
-  for (const s of playing) { try { s.stop(); } catch { /* 無視 */ } }
-  playing = [];
-  if (deviceSpeechSupported() && (speechSynthesis.pending || speechSynthesis.speaking)) speechSynthesis.cancel();
+// 前の読み上げが終わっていなければ、その後ろに並べる（途中で切らない）
+function playClips(parts) {
+  const run = chain.then(() => playClipsNow(parts));
+  chain = run.catch(() => false);
+  return run;
+}
+async function playClipsNow(parts) {
   let bufs;
   try { bufs = await Promise.all(parts.map(([k]) => clip(k))); } catch { return false; }
   if (bufs.some((b) => !b)) return false;
-  if (my !== token) return true;
   const ac = audio();
-  let t = ac.currentTime + 0.03;
+  let t = Math.max(ac.currentTime + 0.03, endAt > ac.currentTime ? endAt + READ_GAP : 0);
   bufs.forEach((b, i) => {
     t = Math.max(ac.currentTime + 0.03, t + parts[i][1]);
     const src = ac.createBufferSource();
     src.buffer = b;
     src.connect(ac.destination);
     src.start(t);
-    playing.push(src);
     t += b.duration;
   });
+  endAt = t;
   return true;
 }
 
@@ -186,7 +189,9 @@ export function speakMove(pos, mv, prevTo, style = 'kana') {
   speak(moveReading(pos, mv, prevTo, style));
 }
 
-export function speakClock(sec, text) {
+// dropIfBusy: 読み上げ中なら読まない（秒読みの数字は遅れて読むと意味がないので）
+export function speakClock(sec, text, { dropIfBusy = false } = {}) {
+  if (dropIfBusy && speaking()) return;
   if (usePack() && pack.index[`clk|${sec}`]) {
     playClips([[`clk|${sec}`, 0]]).then((ok) => { if (!ok) speakDevice(text); });
     return;
