@@ -1438,7 +1438,21 @@ function nextPractice() {
 async function answerPractice(mv) {
   if (state.practice && state.practice.type === 'joseki') { josekiAnswer(mv); return; }
   const pr = state.practice;
-  if (!pr || pr.phase !== 'ask') return;
+  if (!pr) return;
+  if (pr.phase === 'done' && pr.wrong) { // 不正解のあとで答えを見る
+    pr.wrong = false;
+    const it = pr.item;
+    const pos = new Position(it.sfen);
+    state.game.moves = [];
+    state.cursor = 0;
+    update();
+    const bestU = pr.lines[0] ? pr.lines[0].pv[0] : it.best;
+    $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　答え: ${moveToJa(pos, usiToMove(bestU), it.prevTo)}`;
+    $('btnPracticeShow').classList.add('hidden');
+    revealCandidates(pos, pr.lines);
+    return;
+  }
+  if (pr.phase !== 'ask') return;
   if (isMateType(pr.item)) { answerMate(mv); return; }
   sound();
   pr.phase = 'judging';
@@ -1485,12 +1499,16 @@ async function answerPractice(mv) {
   const bestJa = moveToJa(pos, usiToMove(bestU), it.prevTo);
   const head = ok
     ? (u === bestU ? `正解！ ${myJa}は最善手です` : `正解！ ${myJa}も好手です（最善は${bestJa}）`)
-    : `${u === it.played ? '実戦と同じ手です' : '惜しい'}。${myJa}は最善より${loss >= 9999 ? '大きく' : loss}損。最善は${bestJa}`;
+    : `不正解：${u === it.played ? '実戦と同じ手です。' : ''}${myJa}は最善より${loss >= 9999 ? '大きく' : loss}損です。もう一度か、答えを見てください`;
   $('practiceInfo').textContent = `復習 ${pr.idx + 1}/${pr.queue.length}　${head}`;
-  $('btnPracticeShow').classList.add('hidden');
   $('btnPracticeNext').classList.remove('hidden');
   $('btnPracticeRetry').classList.remove('hidden');
-  revealCandidates(pos, lines);
+  pr.wrong = !ok;
+  pr.lines = lines;
+  // 不正解のときは答え（最善手・候補手）を出さない。「答えを見る」で出す
+  $('btnPracticeShow').classList.toggle('hidden', ok);
+  if (ok) revealCandidates(pos, lines);
+  else { state.candidates = []; renderArrows(); renderCandidates([], '答えを見るか、もう一度指してください'); }
 }
 
 function revealCandidates(pos, lines) {
@@ -1830,9 +1848,11 @@ async function josekiAnswer(mv) {
   let msg;
   if (isLine) msg = isBest ? `正解！ ${myJa}は${josekiWord()}の手で、最善手です` : `正解！ ${myJa}は${josekiWord()}の手です。ただし${diff}があります`;
   else if (pr.ext && ok) msg = isBest ? `正解！ ${myJa}は最善手です` : `正解！ ${myJa}は${kind(rank, loss)}です（${diff}）`;
-  else if (pr.ext) msg = `不正解：${myJa}は${kind(rank, loss)}です（${diff}。${EXT_PASS}を超えると不正解）。もう一度か、答えを見てください`;
-  else if (isOther) msg = `不正解：${myJa}は別の定跡の手です${isBest ? '（最善手）' : `（${diff}）`}。この定跡の手ではありません。もう一度か、答えを見てください`;
-  else msg = `不正解：${myJa}は${kind(rank, loss)}${isBest ? '' : `（${diff}）`}ですが、この${josekiWord()}の手ではありません。もう一度か、答えを見てください`;
+  // 不正解のときは最善手の名前を出さない（答えを見るまで隠す）
+  const diffNo = loss == null ? '' : `最善との差${loss}`;
+  if (!ok && pr.ext) msg = `不正解：${myJa}は${kind(rank, loss)}です（${diffNo}。${EXT_PASS}を超えると不正解）。もう一度か、答えを見てください`;
+  else if (!ok && isOther) msg = `不正解：${myJa}は別の定跡の手です${isBest ? '（最善手）' : `（${diffNo}）`}。この定跡の手ではありません。もう一度か、答えを見てください`;
+  else if (!ok) msg = `不正解：${myJa}は${kind(rank, loss)}${isBest ? '' : `（${diffNo}）`}ですが、この${josekiWord()}の手ではありません。もう一度か、答えを見てください`;
   $('practiceInfo').textContent = `${josekiHead()}　${msg}`;
   if (ok) {
     if (pr.first) pr.right++;
@@ -1844,8 +1864,11 @@ async function josekiAnswer(mv) {
     $('btnPracticeNext').classList.add('hidden');
   }
   pr.first = false;
+  pr.lastOk = ok;
   josekiDoneButtons();
-  revealCandidates(pos, lines.slice(0, 3)); // 定跡の勉強では候補手は3つまで（ボタンが画面に収まるように）
+  // 不正解のときは候補手（答え）を出さない。正解なら3つまで
+  if (ok) revealCandidates(pos, lines.slice(0, 3));
+  else { state.candidates = []; renderArrows(); renderCandidates([], '答えを見るか、もう一度指してください'); }
 }
 
 // 答えたあと（正解でも間違いでも、答えを見たあとでも）：もう一度・この先を検討を出す
@@ -1893,7 +1916,8 @@ function josekiExploreEnd() {
   for (const id of ['btnPracticeShow', 'btnPracticeRetry', 'btnPracticeNext']) $(id).classList.toggle('hidden', !b.show.includes(id));
   $('btnPracticeExplore').textContent = '検討';
   update();
-  if (pr.lines) revealCandidates(josekiPos(pr.k), pr.lines.slice(0, 3));
+  if (pr.lines && pr.lastOk) revealCandidates(josekiPos(pr.k), pr.lines.slice(0, 3));
+  else renderCandidates([], '答えを見るか、もう一度指してください');
 }
 
 function josekiRetry() {
@@ -1914,6 +1938,7 @@ function josekiRetry() {
 
 async function josekiShow() {
   const pr = state.practice;
+  pr.lastOk = true;
   if (pr.first) pr.asked++;
   pr.first = false;
   pr.phase = 'done';
