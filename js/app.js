@@ -12,7 +12,7 @@ import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { moveReading, speak, speechSupported } from './speech.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
-  buildRecord, buildProblems, aggregate, pct, STRATEGY_NAMES, detectStrategy,
+  buildRecord, buildProblems, sideEvals, NEXT_MIN_CP, aggregate, pct, STRATEGY_NAMES, detectStrategy,
 } from './records.js';
 import { value as lineValue } from './ai.js';
 import { computeRatings, rankOf, nextRank, isRated, timeClass, TIME_CLASSES, AI_RATING, PROVISIONAL_GAMES } from './rating.js';
@@ -1305,6 +1305,24 @@ async function backfillProblems() {
       for (const pb of buildProblems(game, { results: g.results }, null)) if (pb.type === 'mate' && !have.has(pb.id)) await putProblem(pb);
       g.problemsV = 2;
       await putGame(g);
+    }
+  } catch (e) { console.error(e); }
+  // 前に作った次の一手のうち、手番側がはっきり不利な局面（-300以下）のものを消す（v39より前の問題のため）
+  try {
+    const nexts = (await getAllProblems()).filter((x) => x.type === 'next' && x.cp == null);
+    if (nexts.length) {
+      const ev = new Map();
+      for (const g of await getAllGames()) {
+        if (!g.results || g.results.length !== g.moves.length + 1) continue;
+        const game = { startSfen: g.startSfen, moves: g.moves.map((u) => ({ move: usiToMove(u) })) };
+        for (const [k, v] of sideEvals(game, g.results)) ev.set(k, v);
+      }
+      for (const x of nexts) {
+        const cp = ev.get(x.sfen);
+        if (cp == null) continue;
+        if (cp <= NEXT_MIN_CP) await deleteProblem(x.id);
+        else { x.cp = cp; await putProblem(x); }
+      }
     }
   } catch (e) { console.error(e); }
 }

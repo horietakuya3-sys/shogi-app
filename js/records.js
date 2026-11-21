@@ -166,6 +166,7 @@ function startTurn(game) { return new Position(game.startSfen).turn; }
 //  next:    次の一手。最善手が2番目の手よりはっきり良い局面（どちらの側の手番でも。AIの手番も題材にする）
 //  mate:    詰み筋。手番側に詰みがある局面（N手で詰ませる）
 const NEXT_WR_GAP = 0.2, NEXT_CP_GAP = 400;
+export const NEXT_MIN_CP = -300;
 const wrOf = (s) => (s.mate != null ? (s.mate > 0 ? 1 : 0) : 1 / (1 + Math.exp(-s.cp / 600)));
 // 先手から見た評価を、手番側から見た値に
 const forSide = (s, side) => (side === 0 ? s : (s.mate != null ? { mate: -s.mate } : { cp: -s.cp }));
@@ -216,6 +217,7 @@ export function buildProblems(game, review, mySide) {
     const s2 = forSide(r.score2, side);
     if (s2.mate != null && s2.mate > 0) continue;
     if (Math.abs(me.cp) > 3000) continue;
+    if (me.cp <= NEXT_MIN_CP) continue; // 手番側がはっきり不利な局面（-300以下）は次の一手にしない
     const wrGap = wrOf(me) - wrOf(s2);
     const cpGap = s2.mate != null ? 3000 : me.cp - s2.cp;
     // 形勢が傾いた局面（±1500超）では勝率の差が出にくいので、評価値の差だけで「決め手」を探す
@@ -223,7 +225,7 @@ export function buildProblems(game, review, mySide) {
     // 取られた駒を取り返すだけの手は問題にしない
     const bm = usiToMove(r.best);
     if (i > 0 && !bm.drop && bm.to === game.moves[i - 1].move.to) continue;
-    const b = base(i, { type: 'next', best: r.best, pv: (r.pv || []).slice(0, 6), gap: Math.round(cpGap) });
+    const b = base(i, { type: 'next', best: r.best, pv: (r.pv || []).slice(0, 6), gap: Math.round(cpGap), cp: Math.round(me.cp) });
     b.id = b.sfen + '|' + r.best;
     out.push(b);
     nextCount++;
@@ -232,6 +234,18 @@ export function buildProblems(game, review, mySide) {
 }
 
 // ---- 集計 ----
+// 対局の解析結果から、局面ごとの手番側の評価値（sfen → 評価値）。前に作った次の一手の問題を見直すため
+export function sideEvals(game, results) {
+  const out = new Map();
+  let p = new Position(game.startSfen);
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r && r.score && r.score.mate == null) out.set(p.toSfen(), forSide(r.score, p.turn).cp);
+    if (i < game.moves.length) { p = p.clone(); p.applyMove(game.moves[i].move); }
+  }
+  return out;
+}
+
 export function aggregate(games) {
   const mine = games.filter((g) => g.mySide != null);
   const decided = mine.filter((g) => g.outcome === 'win' || g.outcome === 'lose' || g.outcome === 'draw');
