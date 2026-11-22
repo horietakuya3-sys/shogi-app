@@ -1898,7 +1898,8 @@ async function josekiAnswer(mv) {
   pr.phase = 'done';
   const ok = pr.ext ? isBest || (loss != null && loss <= EXT_PASS) : isLine;
   let msg;
-  if (isLine) msg = isBest ? `正解！ ${myJa}は${josekiWord()}の手で、最善手です` : `正解！ ${myJa}は${josekiWord()}の手です。ただし${diff}があります`;
+  // 定跡（棋譜）の手と一致したら正解。エンジンの最善手と違っても、そのことは言わない
+  if (isLine) msg = `正解！ ${myJa}は${josekiWord()}の手です`;
   else if (pr.ext && ok) msg = isBest ? `正解！ ${myJa}は最善手です` : `正解！ ${myJa}は${kind(rank, loss)}です（${diff}）`;
   // 不正解のときは最善手の名前を出さない（答えを見るまで隠す）
   const diffNo = loss == null ? '' : `最善との差${loss}`;
@@ -2021,13 +2022,9 @@ async function josekiShow() {
     const res = pr.lines ? { lines: pr.lines } : await pr.judge;
     if (state.practice !== pr) return;
     lines = res ? res.lines.filter((l) => l && l.pv && l.pv[0]).sort((a, b) => lineValue(b) - lineValue(a)) : [];
-    // 定跡の手が最善かどうかも添える
-    const r = lines.findIndex((l) => l.pv[0] === pr.moves[k]);
+    // 答えは定跡の手だけを示す（最善手との比較は書かない）
     const ja = moveToJa(pos, usiToMove(pr.moves[k]), prevTo);
-    let note = '';
-    if (r === 0) note = '（最善手でもあります）';
-    else if (r > 0 && lines.length) note = `（最善の${moveToJa(pos, usiToMove(lines[0].pv[0]), prevTo)}とは評価値で${lineValue(lines[0]) - lineValue(lines[r])}の差）`;
-    $('practiceInfo').textContent = `${josekiHead()}　${josekiWord()}は ${ja} です${note}`;
+    $('practiceInfo').textContent = `${josekiHead()}　${josekiWord()}は ${ja} です`;
   }
   revealCandidates(pos, lines.slice(0, 3));
 }
