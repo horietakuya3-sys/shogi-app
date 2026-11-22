@@ -280,7 +280,10 @@ export function aggregate(games) {
   };
   const byMy = group((g) => g.myStrategy);
   const byOpp = group((g) => g.oppStrategy);
-  const byLevel = group((g) => (g.aiLevel ? `Lv${g.aiLevel}` : null));
+  // レベル別は Lv1 から Lv10 の順に並べる
+  const byLevel = group((g) => (g.aiLevel ? `Lv${g.aiLevel}` : null)).sort((a, b) => Number(a.key.slice(2)) - Number(b.key.slice(2)));
+  // 先手・後手別（先手が上）
+  const bySide = group((g) => (g.mySide === 0 ? 'sente' : g.mySide === 1 ? 'gote' : null)).sort((a, b) => (a.key === 'sente' ? -1 : 1) - (b.key === 'sente' ? -1 : 1));
   // 得意戦法: 3局以上指した中で勝率が最も高いもの
   const fav = byMy.filter((o) => o.games >= 3 && o.win > 0).sort((a, b) => b.rate - a.rate)[0] || byMy.filter((o) => o.win > 0).sort((a, b) => b.win - a.win)[0] || null;
 
@@ -304,7 +307,7 @@ export function aggregate(games) {
     if (r2 > r1 * 1.2) weak.push({ score: 0.5, text: `最近の悪手率が${pct(r2)}で、前半の${pct(r1)}より増えている` });
   }
   weak.sort((a, b) => b.score - a.score);
-  return { total, q, byMy, byOpp, byLevel, fav, weak: weak.slice(0, 3) };
+  return { total, q, byMy, byOpp, byLevel, bySide, fav, weak: weak.slice(0, 3) };
 }
 
 export const pct = (x) => `${Math.round(x * 100)}%`;

@@ -1208,6 +1208,7 @@ async function openProfile() {
     }
     s.appendChild(tb);
   };
+  table('先手・後手別', a.bySide, (k) => (k === 'sente' ? '☗先手' : '☖後手'));
   table('自分の戦法別', a.byMy, (k) => STRATEGY_NAMES[k] || k);
   table('相手の戦法別', a.byOpp, (k) => STRATEGY_NAMES[k] || k);
   table('AIのレベル別', a.byLevel, (k) => k);
