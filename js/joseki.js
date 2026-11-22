@@ -9,6 +9,7 @@ import { SN2_LINES } from './joseki_sn2.js';
 import { SN3_LINES } from './joseki_sn3.js';
 import { SN4_LINES } from './joseki_sn4.js';
 import { SL_LINES } from './joseki_sl.js';
+import { SL2_LINES } from './joseki_sl2.js';
 import { POINTS } from './joseki_points.js';
 
 export const LINES = [
@@ -138,6 +139,11 @@ export const SUB_RULES = [
   { key: 'ponpon', base: 'ibisha', re: /ポンポン桂/, name: 'ポンポン桂（対四間飛車）' },
   { key: 'torisashi', base: 'ibisha', re: /鳥刺し/, name: '鳥刺し（対四間飛車）' },
   { key: 'naname', base: 'bougin', re: /斜め棒銀/, name: '斜め棒銀（対四間飛車）' },
+  { key: 'kei45', base: 'kakugawari', re: /４五桂急戦/, name: '角換わり▲４五桂急戦' },
+  { key: 'aigakari37kei', base: 'aigakari', re: /相掛かり▲３七桂/, name: '相掛かり▲３七桂戦法' },
+  { key: 'aigakaribougin', base: 'aigakari', re: /相掛かり棒銀/, name: '相掛かり棒銀' },
+  { key: 'onimukai', base: 'mukai', re: /鬼殺し向かい/, name: '鬼殺し向かい飛車' },
+  { key: 'koyan', base: 'sangen', re: /コーヤン/, name: 'コーヤン流三間飛車' },
   { key: 'migigyoku', base: ['ibisha', 'kakugawari'], re: /右玉/, name: '右玉' },
   { key: 'koshikake', base: 'kakugawari', re: /腰掛け銀/, name: '角換わり腰掛け銀' },
   { key: 'hayakuri', base: ['kakugawari', 'aigakari', 'ibisha'], re: /早繰り銀/, name: '早繰り銀' },
@@ -171,7 +177,7 @@ let shapes = null; // 自分の駒の形 → Map(usi → 指す側の戦法の�
 function build() {
   tree = new Map();
   shapes = new Map();
-  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES]) {
+  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES, ...SL2_LINES]) {
     const pos = new Position();
     for (const u of line.moves.split(' ')) {
       const mv = pos.legalMoves().find((m) => moveToUsi(m) === u);
@@ -237,7 +243,7 @@ export function lineKey(moves) {
 }
 
 export function studyLines() {
-  const all = [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES];
+  const all = [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES, ...SL2_LINES];
   const uniq = [];
   for (const l of all) {
     if (all.some((o) => o !== l && o.moves.length > l.moves.length && o.moves.startsWith(l.moves + ' ') && o.s === l.s && o.g === l.g)) continue;
