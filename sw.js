@@ -5,7 +5,7 @@
 //
 // 公開するたびに VERSION を上げ、version.json の version と notes も同じ版に書き換える
 
-const VERSION = 'v44';
+const VERSION = 'v45';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
@@ -14,7 +14,7 @@ const VOICE_CACHE = 'voice-metan-v1';
 
 const APP_FILES = [
   './', 'index.html', 'terms.html', 'tsume/tsume.txt', 'coi.js', 'css/style.css', 'manifest.webmanifest',
-  'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js', 'js/ai.js', 'js/review.js', 'js/records.js', 'js/sound.js', 'js/book.js', 'js/joseki.js', 'js/joseki_sn.js', 'js/joseki_sj.js', 'js/joseki_sn2.js', 'js/joseki_sn3.js', 'js/joseki_sn4.js', 'js/joseki_points.js', 'js/rating.js', 'js/speech.js',
+  'js/app.js', 'js/shogi.js', 'js/kif.js', 'js/engine.js', 'js/ai.js', 'js/review.js', 'js/records.js', 'js/sound.js', 'js/book.js', 'js/joseki.js', 'js/joseki_sn.js', 'js/joseki_sj.js', 'js/joseki_sn2.js', 'js/joseki_sn3.js', 'js/joseki_sn4.js', 'js/joseki_sl.js', 'js/joseki_points.js', 'js/rating.js', 'js/speech.js',
   'icons/icon-192.png', 'icons/icon-512.png',
 ];
 const ENGINE_FILES = [
