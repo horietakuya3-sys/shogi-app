@@ -220,6 +220,12 @@ export function speakClock(sec, text, { dropIfBusy = false } = {}) {
   enqueue('clock', () => deviceSay(text));
 }
 
+// 中断：「中断しました」。四国めたんの音声には「中断」だけがあるので、その声で読む
+export function speakInterrupt() {
+  if (usePack() && pack.index['end|中断']) { enqueue('end', clipsOr([['end|中断', 0]], '中断しました')); return; }
+  speak('中断しました');
+}
+
 // 終局: 「つみ。まで85手で先手の勝ち」
 // tail は「先手の勝ち」「後手の勝ち」「千日手」「持将棋」「中断」
 export function speakEnd(word, n, tail, text) {

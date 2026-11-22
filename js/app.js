@@ -9,7 +9,7 @@ import { loadBook, bookReady } from './book.js';
 import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
-import { speechSupported, speakMove, speakClock, speakEnd, setVoice, loadVoice, VOICES } from './speech.js';
+import { speechSupported, speakMove, speakClock, speakEnd, speakInterrupt, setVoice, loadVoice, VOICES } from './speech.js';
 import {
   getAllGames, getGame, putGame, deleteGame, getAllProblems, putProblem, deleteProblem,
   buildRecord, buildProblems, sideEvals, NEXT_MIN_CP, aggregate, pct, STRATEGY_NAMES, detectStrategy,
@@ -809,7 +809,9 @@ function endPlay(word, winner, { record = true } = {}) {
   if (state.speech) {
     const tail = winner == null ? word : winner === SENTE ? '先手の勝ち' : '後手の勝ち';
     const text = `${word === '詰み' ? 'つみ' : word}。${state.game.summary}`;
-    setTimeout(() => { try { speakEnd(word, n, tail, text); } catch { /* 無視 */ } }, 900);
+    // 中断は「中断しました」だけ（手数などは読まない）
+    if (word === '中断') setTimeout(() => { try { speakInterrupt(); } catch { /* 無視 */ } }, 600);
+    else setTimeout(() => { try { speakEnd(word, n, tail, text); } catch { /* 無視 */ } }, 900);
   }
   $('endText').textContent = (head === state.game.summary ? head : `${head}\n${state.game.summary}`)
     + (reveal ? `\n${reveal}` : '') + (record ? '' : '\n（戦績には記録していません）');
@@ -1394,6 +1396,31 @@ function retryPractice() {
   nextPractice();
 }
 
+// 問題の判定に使う読み。読むたびに最善手が変わらないよう、局面ごとの結果を端末に覚えておき、同じ局面ではいつも同じ結果を使う
+const JUDGE_KEY = 'shogi-app:judge1';
+let judgeCache = null;
+function judgeStore() {
+  if (!judgeCache) {
+    try { judgeCache = new Map(JSON.parse(localStorage.getItem(JUDGE_KEY) || '[]')); } catch { judgeCache = new Map(); }
+  }
+  return judgeCache;
+}
+function judgeSearch(sfen, multipv, go) {
+  const key = `${multipv}|${sfen.split(' ').slice(0, 3).join(' ')}`;
+  const c = judgeStore().get(key);
+  if (c) return Promise.resolve({ lines: c.map(([pv, cp, mate]) => ({ pv, cp: cp ?? undefined, mate: mate ?? undefined })) });
+  return engine.searchOnce({ sfen, multipv, go }).then((r) => {
+    const ls = r ? r.lines.filter((l) => l && l.pv && l.pv[0]) : [];
+    if (ls.length) {
+      const m = judgeStore();
+      m.set(key, ls.map((l) => [l.pv.slice(0, 10), l.cp ?? null, l.mate ?? null]));
+      while (m.size > 1500) m.delete(m.keys().next().value);
+      try { localStorage.setItem(JUDGE_KEY, JSON.stringify([...m])); } catch { /* 容量が足りなければ覚えない */ }
+    }
+    return r;
+  });
+}
+
 function nextPractice() {
   if (state.practice && state.practice.type === 'joseki') { josekiNext(); return; }
   const pr = state.practice;
@@ -1434,7 +1461,18 @@ function nextPractice() {
     }
   } else {
     // 判定用の解析を先に始めておく
-    pr.judge = engine.searchOnce({ sfen: it.sfen, multipv: 5, go: 'go movetime 2000' });
+    pr.judge = judgeSearch(it.sfen, 5, 'go movetime 2000');
+    // 次の一手で、手番側がはっきり不利な局面（-300以下）だとわかったら、その問題は外して次へ
+    if (ptype(it) === 'next') {
+      pr.judge.then(async (res) => {
+        if (state.practice !== pr || pr.item !== it || pr.phase !== 'ask' || !res || !res.lines.length) return;
+        const best = Math.max(...res.lines.filter((l) => l && l.pv).map(lineValue));
+        if (best > NEXT_MIN_CP) return;
+        try { await deleteProblem(it.id); } catch { /* 無視 */ }
+        toast('手番側が不利な局面だったので、この問題は外しました', 2500);
+        nextPractice();
+      });
+    }
     if (ptype(it) === 'next') {
       $('practiceInfo').textContent = `${no}　${turnJa}の番。この局面の一手を探してください（2番目の手より大きく良い手があります）`;
     } else {
@@ -1491,7 +1529,7 @@ async function answerPractice(mv) {
     p2.applyMove(mv);
     if (!p2.legalMoves().length) myV = 99999; // 詰ませた
     else {
-      const r2 = await engine.searchOnce({ sfen: p2.toSfen(), multipv: 1, go: 'go movetime 1000' });
+      const r2 = await judgeSearch(p2.toSfen(), 1, 'go movetime 1000');
       if (state.practice !== pr) return;
       if (r2 && r2.lines[0]) myV = -lineValue(r2.lines[0]);
     }
@@ -1768,7 +1806,7 @@ async function josekiNext() {
     $('practiceInfo').textContent = `${pr.line.title}　その先：相手が考えています…`;
     $('btnPracticeNext').classList.add('hidden');
     pr.phase = 'wait';
-    const r = await engine.searchOnce({ sfen: pos.toSfen(), multipv: 1, go: 'go movetime 800' });
+    const r = await judgeSearch(pos.toSfen(), 1, 'go movetime 800');
     if (state.practice !== pr) return;
     const u = r && r.lines[0] && r.lines[0].pv && r.lines[0].pv[0];
     if (!u || u === 'resign' || u === 'win') { josekiLineDone(); return; }
@@ -1790,7 +1828,7 @@ function josekiAsk(k) {
   josekiSetBoard(k);
   state.flipped = pr.side === GOTE;
   const pos = josekiPos(k);
-  pr.judge = engine.searchOnce({ sfen: pos.toSfen(), multipv: pr.ext ? 3 : 5, go: 'go movetime 1500' });
+  pr.judge = judgeSearch(pos.toSfen(), pr.ext ? 3 : 5, 'go movetime 1500');
   const ask = pr.ext ? '定跡のあとの局面です。よい手を指してください' : `${josekiWord()}の手を指してください`;
   $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。${ask}`;
   $('btnPracticeShow').classList.remove('hidden');
@@ -1841,7 +1879,7 @@ async function josekiAnswer(mv) {
   else {
     const p2 = pos.clone();
     p2.applyMove(mv);
-    const r2 = await engine.searchOnce({ sfen: p2.toSfen(), multipv: 1, go: 'go movetime 1000' });
+    const r2 = await judgeSearch(p2.toSfen(), 1, 'go movetime 1000');
     if (state.practice !== pr) return;
     if (r2 && r2.lines[0]) myV = -lineValue(r2.lines[0]);
   }
@@ -2272,6 +2310,7 @@ function bindUi() {
   };
   $('btnEndReview').onclick = () => { $('endSheet').classList.add('hidden'); state.cursor = 0; startReview(); };
   $('btnEndClose').onclick = () => $('endSheet').classList.add('hidden');
+  $('btnEndNewGame').onclick = () => { $('endSheet').classList.add('hidden'); openPlaySheet(); };
   $('endSheet').addEventListener('click', (e) => { if (e.target === $('endSheet')) $('endSheet').classList.add('hidden'); });
   for (const id of ['playSheet', 'pasteSheet']) {
     $(id).addEventListener('click', (e) => { if (e.target === $(id)) $(id).classList.add('hidden'); });
