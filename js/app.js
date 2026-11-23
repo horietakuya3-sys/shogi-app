@@ -1114,6 +1114,9 @@ async function showRatingChange(key, undo) {
 
 // ---- プロフィール ----
 const OUT_JA = { win: '勝ち', lose: '負け', draw: '引き分け', none: '中断' };
+// 戦歴の編集（削除する対局を選ぶ）
+const profileEdit = { on: false, sel: new Set() };
+
 async function openProfile() {
   const sheet = $('profileSheet');
   sheet.classList.remove('hidden');
@@ -1214,11 +1217,35 @@ async function openProfile() {
   table('自分の戦法別', a.byMy, (k) => STRATEGY_NAMES[k] || k);
   table('相手の戦法別', a.byOpp, (k) => STRATEGY_NAMES[k] || k);
   table('AIのレベル別', a.byLevel, (k) => k);
-  // 戦歴
+  // 戦歴（「編集」で選んで削除できる）
   const s6 = sec('戦歴（新しい順）');
-  const list = games.filter((g) => g.mySide != null).sort((x, y) => y.savedAt - x.savedAt).slice(0, 50);
+  const editing = profileEdit.on;
+  const bar = el('div', 'pf-editbar');
+  const bEdit = el('button', 'sub', editing ? 'やめる' : '編集（削除）');
+  bEdit.onclick = () => { profileEdit.on = !editing; profileEdit.sel.clear(); openProfile(); };
+  bar.appendChild(bEdit);
+  if (editing) {
+    const bDel = el('button', 'danger', `選んだ${profileEdit.sel.size}局を削除`);
+    bDel.disabled = !profileEdit.sel.size;
+    bDel.onclick = async () => {
+      const n = profileEdit.sel.size;
+      const r = await confirmSheet(`選んだ${n}局を戦績から削除しますか？　元に戻せません。レーティングと集計も計算し直します（この対局から作った問題は残ります）`, '削除する');
+      if (!r.ok) return;
+      for (const k of profileEdit.sel) { try { await deleteGame(k); } catch { /* 無視 */ } }
+      profileEdit.on = false;
+      profileEdit.sel.clear();
+      toast(`${n}局を削除しました`);
+      openProfile();
+    };
+    bar.appendChild(bDel);
+    bar.appendChild(el('div', 'pf-sub', '消したい対局をタップして選んでください'));
+  }
+  s6.appendChild(bar);
+  const all = games.filter((g) => g.mySide != null).sort((x, y) => y.savedAt - x.savedAt);
+  const list = editing ? all : all.slice(0, 50);
   for (const g of list) {
-    const row = el('div', 'pf-game');
+    const row = el('div', 'pf-game' + (editing && profileEdit.sel.has(g.key) ? ' sel' : ''));
+    if (editing) row.appendChild(el('div', 'pf-check', profileEdit.sel.has(g.key) ? '☑' : '☐'));
     const left = el('div', 'pf-gl');
     left.appendChild(el('div', 'pf-gt', `${(g.date || '').slice(0, 16)}　${g.mySide === 0 ? '☗' : '☖'} 対 ${g.opponent || '相手'}`));
     const info = [`${g.moves.length}手`, STRATEGY_NAMES[g.myStrategy] || '', `相手 ${STRATEGY_NAMES[g.oppStrategy] || ''}`];
@@ -1227,7 +1254,15 @@ async function openProfile() {
     left.appendChild(el('div', 'pf-gs', info.join('・')));
     row.appendChild(left);
     row.appendChild(el('div', 'pf-res ' + (g.outcome || ''), OUT_JA[g.outcome] || '-'));
-    row.onclick = () => openRecord(g);
+    row.onclick = editing
+      ? async () => {
+        if (profileEdit.sel.has(g.key)) profileEdit.sel.delete(g.key); else profileEdit.sel.add(g.key);
+        const sc = $('profileSheet').querySelector('.sheet-inner');
+        const y = sc ? sc.scrollTop : 0;
+        await openProfile();
+        if (sc) sc.scrollTop = y; // 選ぶたびに一番上へ戻らないように
+      }
+      : () => openRecord(g);
     s6.appendChild(row);
   }
 }
@@ -2314,7 +2349,7 @@ function bindUi() {
   }
 
   // プロフィール・復習
-  $('btnProfileClose').onclick = () => $('profileSheet').classList.add('hidden');
+  $('btnProfileClose').onclick = () => { profileEdit.on = false; profileEdit.sel.clear(); $('profileSheet').classList.add('hidden'); };
   $('btnProfilePractice').onclick = () => { $('profileSheet').classList.add('hidden'); openPracticeMenu(); };
   const pm = (t) => () => { $('practiceMenu').classList.add('hidden'); startPractice(t); };
   $('btnPmMistake').onclick = pm('mistake');

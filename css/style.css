@@ -224,6 +224,13 @@ body.noscroll { overflow: hidden; }
 .pf-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .pf-table th, .pf-table td { padding: 4px 6px; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.08); }
 .pf-table th:first-child, .pf-table td:first-child { text-align: left; }
+#confirmSheet, #promoSheet { z-index: 25; } /* 全画面のシートの上にも出す */
+.pf-editbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 8px; }
+.pf-editbar button { width: auto; padding: 6px 12px; }
+.pf-editbar button.danger { background: #7a2b2b; color: #fff; }
+.pf-editbar button:disabled { opacity: 0.5; }
+.pf-game.sel { background: rgba(255,120,120,0.15); }
+.pf-check { font-size: 18px; width: 22px; }
 .pf-game { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-bottom: 1px solid rgba(255,255,255,0.08); cursor: pointer; }
 .pf-gl { flex: 1; min-width: 0; }
 .pf-gt { font-size: 14px; }
