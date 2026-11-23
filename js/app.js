@@ -500,7 +500,7 @@ function setupPlaySheet() {
     const st = row.querySelector('.p-strategy');
     const ty = row.querySelector('.p-type');
     const ca = row.querySelector('.p-castle');
-    lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}（R${AI_RATING[i + 1]}）</option>`).join('');
+    lv.innerHTML = LEVELS.slice(1).map((l, i) => `<option value="${i + 1}">${l.name}（R${AI_RATING[i + 1]}・${rankOf(AI_RATING[i + 1])}くらい）</option>`).join('');
     st.innerHTML = Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}">${v.base ? '　' : ''}${v.name}${v.note ? '（相手次第）' : ''}</option>`).join('');
     ca.innerHTML = Object.entries(CASTLES).filter(([, v]) => !v.hidden)
       .map(([k, v]) => `<option value="${k}">${k === 'auto' ? '囲い: ' : ''}${v.name}${v.side ? (v.side === 'right' ? '（振り飛車）' : '（居飛車）') : ''}</option>`).join('');
