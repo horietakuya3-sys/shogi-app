@@ -1,5 +1,5 @@
 // 指し手の読み上げ
-// 1. 四国めたん（VOICEVOX）で前もって作った音声（voice/metan/）。一手ぶん（座標＋駒＋成・不成・打）を丸ごと1つの音にしてある
+// 1. 四国めたん・春日部つむぎ（VOICEVOX）で前もって作った音声（voice/metan/、voice/tsumugi/）。一手ぶん（座標＋駒＋成・不成・打）を丸ごと1つの音にしてある
 // 2. 端末の音声合成（音声をまだ読み込めていないとき、または「端末の音声」を選んだとき）
 import { SENTE, moveToJa, fileOf, rankOf, PIECE_NAME } from './shogi.js';
 import { audio } from './sound.js';
@@ -101,14 +101,15 @@ export const speaking = () => reading || waiting.length > 0;
 // ---- 前もって作った音声 ----
 export const VOICES = {
   metan: { name: '四国めたん', credit: 'VOICEVOX:四国めたん', dir: 'voice/metan/', sizeMB: 16 },
+  tsumugi: { name: '春日部つむぎ', credit: 'VOICEVOX:春日部つむぎ', dir: 'voice/tsumugi/', sizeMB: 16 },
 };
-let voiceName = 'metan'; // 'metan' または 'device'
+let voiceName = 'metan'; // VOICES のどれか（metan、tsumugi）、または 'device'
 export function setVoice(name) { voiceName = VOICES[name] ? name : 'device'; }
 
 const pack = { name: '', index: null, buf: null, loading: null, failed: false };
 const decoded = new Map(); // キー → AudioBuffer
 
-// 音声を読み込む（初回は約16MB。Service Worker がキャッシュするので2回目からはネットなしで使える）
+// 音声を読み込む（声ごとに初回は約16MB。Service Worker がキャッシュするので2回目からはネットなしで使える）
 // onStart は実際にネットから取ってくるときだけ呼ぶ
 export function loadVoice(onStart) {
   const v = VOICES[voiceName];

@@ -5,12 +5,13 @@
 //
 // 公開するたびに VERSION を上げ、version.json の version と notes も同じ版に書き換える
 
-const VERSION = 'v50';
+const VERSION = 'v51';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
 const BOOK_CACHE = 'book-petabook233-v2';
 const VOICE_CACHE = 'voice-metan-v1';
+const VOICE_CACHE_TSUMUGI = 'voice-tsumugi-v1';
 
 const APP_FILES = [
   './', 'index.html', 'terms.html', 'tsume/tsume.txt', 'coi.js', 'css/style.css', 'manifest.webmanifest',
@@ -40,7 +41,7 @@ self.addEventListener('message', (ev) => {
 self.addEventListener('activate', (ev) => {
   ev.waitUntil((async () => {
     for (const k of await caches.keys()) {
-      if (![APP_CACHE, ENGINE_CACHE, SHARE_CACHE, BOOK_CACHE, VOICE_CACHE].includes(k)) await caches.delete(k);
+      if (![APP_CACHE, ENGINE_CACHE, SHARE_CACHE, BOOK_CACHE, VOICE_CACHE, VOICE_CACHE_TSUMUGI].includes(k)) await caches.delete(k);
     }
     await self.clients.claim();
   })());
@@ -81,7 +82,7 @@ self.addEventListener('fetch', (ev) => {
   }
   if (req.method !== 'GET') return;
   const isEngine = url.pathname.includes('/engine/') || url.pathname.includes('/book/') || url.pathname.includes('/voice/');
-  const bigCache = url.pathname.includes('/book/') ? BOOK_CACHE : url.pathname.includes('/voice/') ? VOICE_CACHE : ENGINE_CACHE;
+  const bigCache = url.pathname.includes('/book/') ? BOOK_CACHE : url.pathname.includes('/voice/tsumugi/') ? VOICE_CACHE_TSUMUGI : url.pathname.includes('/voice/') ? VOICE_CACHE : ENGINE_CACHE;
   ev.respondWith((async () => {
     if (isEngine) {
       // エンジンは大きく変わらないのでキャッシュ優先

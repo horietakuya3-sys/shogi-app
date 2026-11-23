@@ -1,5 +1,5 @@
-# 四国めたん（VOICEVOX）で将棋の読み上げ音声を前もって作り、1つのファイルにまとめる
-# 使い方: python3 tools/build_voice.py <出力先> （VOICEVOX CORE 0.16 の Python 版、ONNX Runtime、0.vvm、Open JTalk 辞書を D に置く）
+# VOICEVOX の声（四国めたん・春日部つむぎなど）で将棋の読み上げ音声を前もって作り、1つのファイルにまとめる
+# 使い方: python3 tools/build_voice.py <出力先> 0 <style id> <クレジット>  例: 四国めたん 2 "VOICEVOX:四国めたん"、春日部つむぎ 8 "VOICEVOX:春日部つむぎ"（VOICEVOX CORE 0.16 の Python 版、ONNX Runtime、0.vvm、Open JTalk 辞書を D に置く）
 # 出力: OUT/pack.bin（MP3を並べたもの）と OUT/index.json（キー → [開始, 長さ]）
 import json, os, subprocess, sys, tempfile, time
 from concurrent.futures import ThreadPoolExecutor
@@ -8,7 +8,8 @@ from voicevox_core.blocking import Onnxruntime, OpenJtalk, Synthesizer, VoiceMod
 D = "/home/claude/vv/dl"
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/home/claude/vv/pack"
 LIMIT = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-SID = 2  # 四国めたん ノーマル
+SID = int(sys.argv[3]) if len(sys.argv) > 3 else 2  # 2: 四国めたん ノーマル、8: 春日部つむぎ ノーマル
+CREDIT = sys.argv[4] if len(sys.argv) > 4 else "VOICEVOX:四国めたん"
 os.makedirs(OUT, exist_ok=True)
 
 ort = Onnxruntime.load_once(filename=f"{D}/voicevox_onnxruntime-linux-x64-1.17.3/lib/libvoicevox_onnxruntime.so.1.17.3")
@@ -122,5 +123,5 @@ with open(f"{OUT}/pack.bin", "wb") as fo:
         fo.write(b)
         index[k] = [pos, len(b)]
         pos += len(b)
-json.dump({"voice": "VOICEVOX:四国めたん", "format": "mp3", "clips": index}, open(f"{OUT}/index.json", "w"), ensure_ascii=False, separators=(",", ":"))
+json.dump({"voice": CREDIT, "format": "mp3", "clips": index}, open(f"{OUT}/index.json", "w"), ensure_ascii=False, separators=(",", ":"))
 print("done", len(index), pos, "bytes", round(time.time() - t0), "s")

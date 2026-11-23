@@ -36,7 +36,7 @@ const state = {
   clockSound: true,
   speech: false,
   speechStyle: 'kana',
-  voice: 'metan', // 読み上げの声: 'metan'（VOICEVOX:四国めたん）または 'device'（端末の音声）
+  voice: 'metan', // 読み上げの声: 'metan'（VOICEVOX:四国めたん）、'tsumugi'（VOICEVOX:春日部つむぎ）、'device'（端末の音声）
   selected: null, // { from } or { drop }
   candidates: [],
   engineReady: false,
@@ -681,7 +681,7 @@ function tickClock() {
   }
 }
 
-// 読み上げの声を用意する（四国めたんの音声は初回だけ約16MBを読み込む。読み込めるまでは端末の音声で読む）
+// 読み上げの声を用意する（四国めたん・春日部つむぎの音声は、声ごとに初回だけ約16MBを読み込む。読み込めるまでは端末の音声で読む）
 function prepareVoice() {
   setVoice(state.voice);
   if (!state.speech || state.voice === 'device') return;
@@ -2198,7 +2198,7 @@ function restore() {
       state.clockSound = s.clockSound !== false;
       state.speech = !!s.speech;
       state.speechStyle = 'kana';
-      state.voice = s.voice === 'device' ? 'device' : 'metan';
+      state.voice = ['device', 'tsumugi'].includes(s.voice) ? s.voice : 'metan';
     }
   } catch { /* 無視 */ }
   state.game = { startSfen: STARTPOS, moves: [], header: {}, result: '', summary: '', meta: { mySide: null } };
