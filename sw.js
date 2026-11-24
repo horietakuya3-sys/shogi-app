@@ -5,7 +5,7 @@
 //
 // 公開するたびに VERSION を上げ、version.json の version と notes も同じ版に書き換える
 
-const VERSION = 'v51';
+const VERSION = 'v52';
 const APP_CACHE = `app-${VERSION}`;
 const ENGINE_CACHE = 'engine-k-p-7.6.3';
 const SHARE_CACHE = 'share';
