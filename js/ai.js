@@ -25,6 +25,7 @@ export const LEVELS = [
 export const STRATEGIES = {
   auto: { name: 'ランダム（毎局変わる）' },
   nojoseki: { name: '定跡を使わない（読みだけで指す）' },
+  mine: { name: '自分で登録した定跡（外れたら読みで指す）', attack: [], castle: 'simple' },
   ibisha: { name: '居飛車', attack: ['2g2f', '2f2e', '7g7f'], castle: 'simple' },
   yagura: { name: '矢倉', attack: ['7g7f', '6g6f', '2g2f'], castle: 'yagura' },
   gangi: { name: '雁木', attack: ['7g7f', '6g6f', '2g2f'], castle: 'gangi' },

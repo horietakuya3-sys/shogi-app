@@ -162,10 +162,38 @@ export const SUB_RULES = [
   { key: 'ureshino', base: 'kishu', re: /嬉野/, name: '嬉野流' },
 ];
 
+// ---- 自分で登録した定跡（端末の localStorage に保存） ----
+// 1本ずつ { id, s, g, subS, subG, note, moves, evals, cut, cutLoss, created }。s・g は大きな戦法、subS・subG は選んだ細かい戦法（なければ null）
+// 登録のときにエンジンで全部の手を読み、evals に各局面の「最善手:評価値」と最後の局面の評価値を入れる（js/joseki_evals.js と同じ形）
+// cut：最善から MY_CUT を超えて損した最初の手（0始まり）。なければ null で、互角の手順として AIの定跡と勉強の両方に使う
+// cut があるものは、cut の手前までを AIの定跡に（MY_AI_MIN 手以上あるとき）、全部の手順を勉強用に使う
+export const MY_CUT = 250;
+export const MY_AI_MIN = 6;
+const MY_KEY = 'shogi-app:myjoseki';
+export function myLines() {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const a = JSON.parse(localStorage.getItem(MY_KEY) || '[]');
+    return Array.isArray(a) ? a.filter((l) => l && typeof l.moves === 'string') : [];
+  } catch { return []; }
+}
+export function saveMyLines(a) {
+  localStorage.setItem(MY_KEY, JSON.stringify(a));
+  tree = null; // AIの定跡の木を作り直す
+  shapes = null;
+}
+
 // 手順の、手番 side の戦法の印（大きな戦法＋当てはまる細かい戦法）
 export function lineTags(line, side) {
   const t = side === 0 ? line.s : line.g;
   const out = [t];
+  if (line.mine) {
+    // 自分で登録した定跡：どちらの手番でも「自分の定跡」に出す。細かい戦法は登録のときに選んだもの
+    const sub = side === 0 ? line.subS : line.subG;
+    if (sub && sub !== t) out.push(sub);
+    out.push('mine');
+    return out;
+  }
   for (const r of SUB_RULES) {
     const bases = Array.isArray(r.base) ? r.base : [r.base];
     if (bases.includes(t) && r.re.test(line.note || '') && (r.side == null || r.side === side)) out.push(r.key);
@@ -179,7 +207,12 @@ let shapes = null; // 自分の駒の形 → Map(usi → 指す側の戦法の�
 function build() {
   tree = new Map();
   shapes = new Map();
-  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES, ...SL2_LINES]) {
+  const mine = [];
+  for (const l of myLines()) {
+    if (l.cut == null) { mine.push({ ...l, mine: true }); continue; }
+    if (l.cut >= MY_AI_MIN) mine.push({ ...l, mine: true, moves: l.moves.split(' ').slice(0, l.cut).join(' ') });
+  }
+  for (const line of [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES, ...SL2_LINES, ...mine]) {
     const pos = new Position();
     for (const u of line.moves.split(' ')) {
       const mv = pos.legalMoves().find((m) => moveToUsi(m) === u);
@@ -225,12 +258,12 @@ export function josekiShapeMoves(pos, strategy) {
 const TAG_NAMES = {
   ibisha: '居飛車', yagura: '矢倉', gangi: '雁木', kakugawari: '角換わり', aigakari: '相掛かり', yokofu: '横歩取り', bougin: '棒銀',
   migishiken: '右四間飛車', elmo: 'エルモ急戦', millennium: 'ミレニアム', shiken: '四間飛車', fujii: '藤井システム', sangen: '三間飛車',
-  naka: '中飛車', mukai: '向かい飛車', sujichigai: '筋違い角', kishu: '奇襲',
+  naka: '中飛車', mukai: '向かい飛車', sujichigai: '筋違い角', kishu: '奇襲', mine: '自分で登録した定跡',
 };
 for (const r of SUB_RULES) TAG_NAMES[r.key] = r.name;
 export const tagName = (t) => TAG_NAMES[t] || t;
 // 一覧の並び：大きな戦法のすぐ後に、その細かい戦法
-export const STUDY_TAGS = [];
+export const STUDY_TAGS = ['mine'];
 for (const t of ['ibisha', 'yagura', 'gangi', 'kakugawari', 'aigakari', 'yokofu', 'bougin', 'migishiken', 'elmo', 'millennium', 'shiken', 'fujii', 'sangen', 'naka', 'mukai', 'sujichigai', 'kishu']) {
   STUDY_TAGS.push(t);
   for (const r of SUB_RULES) if ((Array.isArray(r.base) ? r.base[0] : r.base) === t) STUDY_TAGS.push(r.key);
@@ -247,6 +280,8 @@ export function lineKey(moves) {
 export function studyLines() {
   const all = [...LINES, ...SN_LINES, ...SJ_LINES, ...SN2_LINES, ...SN3_LINES, ...SN4_LINES, ...SL_LINES, ...SL2_LINES];
   const uniq = [];
+  // 自分で登録した定跡は、短くても、ほかの手順と重なっていてもそのまま出す
+  const mine = myLines().map((l) => ({ ...l, mine: true, title: l.note || `${tagName(l.s)} 対 ${tagName(l.g)}`, bads: myBads(l) }));
   for (const l of all) {
     if (all.some((o) => o !== l && o.moves.length > l.moves.length && o.moves.startsWith(l.moves + ' ') && o.s === l.s && o.g === l.g)) continue;
     if (uniq.some((o) => o.moves === l.moves)) continue;
@@ -259,13 +294,36 @@ export function studyLines() {
     const t = short(l);
     const dup = l.note && uniq.some((o) => o !== l && short(o) === t && o.note !== l.note);
     return { ...l, title: dup ? l.note : t };
-  });
+  }).concat(mine);
+}
+
+// 自分の定跡で、最善から MY_CUT を超えて損した手：[{ ply, best, loss }]
+export function myBads(l) {
+  const ev = lineEvals(l);
+  if (!ev) return [];
+  const m = l.moves.split(' ');
+  const out = [];
+  for (let k = 0; k < m.length; k++) {
+    const a = ev.plies[k];
+    const after = k + 1 < m.length ? ev.plies[k + 1] && -ev.plies[k + 1].v : ev.final == null ? null : -ev.final;
+    if (!a || after == null || a.best === m[k]) continue;
+    const loss = a.v - after;
+    if (loss > MY_CUT) out.push({ ply: k, best: a.best, loss: Math.round(loss) });
+  }
+  return out;
 }
 
 // 定跡の勉強で問題にする手（side の手番の手だけ、初手を0とした手数）。表になければ side の手を全部
 export function studyPoints(l, side) {
-  const p = POINTS[lineKey(l.moves)];
   const all = l.moves.split(' ').map((_, k) => k).filter((k) => k % 2 === side);
+  // 自分で登録した定跡は、読み込んだ棋譜と同じ簡単な選び方（エンジンの読みの表がないので）
+  // 自分の悪手（大きく損した手）は問題にしない（悪い手を当てさせないため）。その手は進めておき、次の問題で知らせる
+  if (l.mine) {
+    const bad = new Set((l.bads || []).map((b) => b.ply));
+    const g = gamePoints(l.moves.split(' '), side).filter((k) => !bad.has(k));
+    return g.length ? g : all.filter((k) => !bad.has(k));
+  }
+  const p = POINTS[lineKey(l.moves)];
   if (p == null) return all;
   const ks = p ? p.split(',').map(Number).filter((k) => k % 2 === side) : [];
   return ks.length ? ks : all.slice(-1);
@@ -316,7 +374,7 @@ export const CH_MIN_BASE = 8; // これより手前の分かれ目は章にし�
 export const CH_SUCCESS = 300;
 export const CH_BAD = 120; // 成功例で、相手の手がこれ以上損なら「悪手」として示す
 function lineEvals(l) {
-  const e = EVALS[lineKey(l.moves)];
+  const e = l.evals || EVALS[lineKey(l.moves)];
   if (!e) return null;
   const t = e.split(' ');
   const final = t.pop();
@@ -386,7 +444,9 @@ export function josekiChapters(tag, side) {
     byKey.set(key, { key, base: key.split(' ').length, side, title: top[0], vars: vars.filter((v) => v.title === top[0]) });
   }
   // 成功例専用の手順（相手の悪手で切った元の手順）を、定跡の手順と分かれるところの章に足す
-  for (const sl of SUCCESS_LINES) {
+  // 自分の定跡で差がついた手順も、得をした側の成功例として同じように足す
+  const myS = myLines().filter((l) => l.cut != null && l.evals).map((l) => ({ ...l, mine: true, side: 1 - (l.cut % 2), k: l.cut, loss: l.cutLoss }));
+  for (const sl of [...SUCCESS_LINES, ...myS]) {
     if (sl.side !== side || !lineTags(sl, side).includes(tag)) continue;
     const m = sl.moves.split(' ');
     let shared = 0;
@@ -414,7 +474,8 @@ export function josekiChapters(tag, side) {
       const others = varsAt(key).filter((x) => !sl.moves.startsWith(x.line.moves));
       byKey.set(key, { key, base: b, side, title: v.title, vars: others });
     }
-    byKey.get(m.slice(0, b).join(' ')).vars.push(v);
+    const ch = byKey.get(m.slice(0, b).join(' '));
+    if (!ch.vars.some((x) => x.line.moves === sl.moves)) ch.vars.push(v);
   }
   const chapters = [...byKey.values()].map(finishChapter);
   // 成功例と互角の変化の両方がある章を先に、そのあとは成功例のある章、基本図の手数の順

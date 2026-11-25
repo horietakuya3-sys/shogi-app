@@ -220,7 +220,27 @@
     <div class="row"><span>形式</span><select id="jsView"><option value="list">定跡の一覧</option><option value="ch">章立て（基本図→成功例→互角の変化）</option></select></div>
     <div id="jsList" class="js-list"></div>
     <button id="btnJsGame" class="hidden">盤に読み込んだ棋譜の序盤で勉強する</button>
+    <button id="btnJsMine">自分の定跡を登録・管理（盤の手順や貼り付けた棋譜から）</button>
     <button id="btnJsClose" class="sub">閉じる</button>
+  </div>
+</div>
+
+<div class="sheet hidden" id="myJosekiSheet">
+  <div class="sheet-inner">
+    <div class="sheet-title">自分の定跡</div>
+    <div class="pf-sub" id="mjInfo"></div>
+    <div id="mjForm">
+      <div class="row"><span>名前</span><input id="mjName" type="text" maxlength="60"></div>
+      <div class="row"><span>先手の戦法</span><select id="mjS"></select></div>
+      <div class="row"><span>後手の戦法</span><select id="mjG"></select></div>
+      <div class="row"><span>何手目まで</span><select id="mjN"></select></div>
+      <button id="btnMjSave" class="primary">登録する</button>
+    </div>
+    <div class="pf-sub">登録するとエンジンで全部の手を読みます（1手1秒ほど）。最後まで互角の手順は定跡として、対局のAI（戦法を「自分で登録した定跡」や選んだ戦法にしたとき）も指し、定跡の勉強にも出ます。途中で評価値250を超える差がついた手順は勉強用になり、差がつく手の手前までだけをAIの定跡に使います。勉強では悪手のところで知らせ、章立てでは得をした側の成功例になります。端末の中だけに保存し、プロフィールの書き出しにも入ります</div>
+    <div class="sheet-title" style="margin-top:8px">登録した定跡</div>
+    <div id="mjList" class="js-list"></div>
+    <button id="btnMjStudy" class="hidden">自分の定跡で勉強する</button>
+    <button id="btnMjClose" class="sub">閉じる</button>
   </div>
 </div>
 

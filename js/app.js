@@ -6,7 +6,7 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
-import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES, josekiChapters } from './joseki.js';
+import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES, josekiChapters, myLines, saveMyLines, MY_CUT, MY_AI_MIN } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { speechSupported, speakMove, speakClock, speakEnd, speakInterrupt, setVoice, loadVoice, VOICES } from './speech.js';
@@ -1286,7 +1286,7 @@ function openRecord(g) {
 
 async function exportData() {
   try {
-    const data = { app: 'shogi-app', version: 1, exportedAt: new Date().toISOString(), games: await getAllGames(), problems: await getAllProblems() };
+    const data = { app: 'shogi-app', version: 1, exportedAt: new Date().toISOString(), games: await getAllGames(), problems: await getAllProblems(), myJoseki: myLines() };
     const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1302,7 +1302,14 @@ async function importData(text) {
     if (d.app !== 'shogi-app') throw new Error('形式が違います');
     for (const g of d.games || []) await putGame(g);
     for (const p of d.problems || []) await putProblem(p);
-    toast(`読み込みました（対局${(d.games || []).length}局、問題${(d.problems || []).length}問）`);
+    // 自分の定跡は、同じ手順がなければ足す
+    let nj = 0;
+    if (Array.isArray(d.myJoseki) && d.myJoseki.length) {
+      const all = myLines();
+      for (const l of d.myJoseki) if (l && typeof l.moves === 'string' && !all.some((x) => x.moves === l.moves)) { all.push(l); nj++; }
+      if (nj) saveMyLines(all);
+    }
+    toast(`読み込みました（対局${(d.games || []).length}局、問題${(d.problems || []).length}問${nj ? `、自分の定跡${nj}本` : ''}）`);
     openProfile();
   } catch (e) { toast('読み込めませんでした: ' + e.message); }
 }
@@ -1716,11 +1723,15 @@ function openJosekiSheet() {
   if (state.mode === 'play') return;
   const lines = studyLines();
   const sel = $('jsStrategy');
-  if (!sel.options.length) {
-    const isSub = (t) => SUB_RULES.some((r) => r.key === t);
-    sel.innerHTML = STUDY_TAGS.filter((t) => lines.some((l) => lineTags(l, 0).includes(t) || lineTags(l, 1).includes(t)))
-      .map((t) => `<option value="${t}">${isSub(t) ? '　' : ''}${tagName(t)}</option>`).join('');
+  // 戦法の選択肢は開くたびに作り直す（自分の定跡を登録・削除したときのため）
+  const isSub = (t) => SUB_RULES.some((r) => r.key === t);
+  const keep = sel.value;
+  sel.innerHTML = STUDY_TAGS.filter((t) => lines.some((l) => lineTags(l, 0).includes(t) || lineTags(l, 1).includes(t)))
+    .map((t) => `<option value="${t}">${isSub(t) ? '　' : ''}${tagName(t)}</option>`).join('');
+  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  if (!sel.onchange) {
     sel.onchange = renderJosekiList;
+    $('btnJsMine').onclick = () => { $('josekiSheet').classList.add('hidden'); openMyJosekiSheet(); };
     $('jsSide').onchange = renderJosekiList;
     $('jsView').onchange = renderJosekiList;
     $('btnJsClose').onclick = () => $('josekiSheet').classList.add('hidden');
@@ -1740,6 +1751,153 @@ function openJosekiSheet() {
     startJosekiStudy(l, side);
   };
   $('josekiSheet').classList.remove('hidden');
+}
+
+// ---- 自分の定跡の登録：盤の手順（自分で指した手順や、貼り付けた・読み込んだ棋譜）を定跡として端末に保存する ----
+const MY_MIN = 4;
+function boardLineForJoseki() {
+  // 盤で見ている手順（変化を指していればその変化）。問題を解いている間は、その前に盤にあった棋譜
+  if (state.mode === 'study') return { g: state.game, moves: line().map((m) => moveToUsi(m.move)), cursor: state.cursor };
+  const sv = state.saved;
+  if (!sv || !sv.game) return null;
+  const mv = sv.game.moves.slice(0, sv.branch ? sv.branch.base : undefined).map((m) => moveToUsi(m.move))
+    .concat(sv.branch ? sv.branch.moves.map((m) => moveToUsi(m.move)) : []);
+  return { g: sv.game, moves: mv, cursor: sv.cursor };
+}
+
+// 戦法の選択肢（大きな戦法の下に細かい戦法）。値は印のキー
+function myStrategyOptions(sel, value) {
+  const isSub = (t) => SUB_RULES.some((r) => r.key === t);
+  sel.innerHTML = STUDY_TAGS.filter((t) => t !== 'mine').map((t) => `<option value="${t}">${isSub(t) ? '　' : ''}${tagName(t)}</option>`).join('');
+  sel.value = [...sel.options].some((o) => o.value === value) ? value : 'ibisha';
+}
+// 細かい戦法を選んだときは、大きな戦法（s・g）と細かい戦法（subS・subG）に分けて保存する
+function splitTag(t) {
+  const r = SUB_RULES.find((x) => x.key === t);
+  return r ? { base: Array.isArray(r.base) ? r.base[0] : r.base, sub: t } : { base: t, sub: null };
+}
+
+function openMyJosekiSheet() {
+  const src = boardLineForJoseki();
+  const ok = src && src.g.startSfen === STARTPOS && src.moves.length >= MY_MIN;
+  $('mjForm').classList.toggle('hidden', !ok);
+  if (!ok) {
+    $('mjInfo').textContent = src && src.g.startSfen !== STARTPOS
+      ? '平手の初形から始まる棋譜だけ登録できます'
+      : `盤で${MY_MIN}手以上指すか、棋譜を貼り付けて（読み込んで）から開いてください。最初から指したい手順を盤で指していけば、そのまま登録できます`;
+  } else {
+    const ms = src.moves;
+    const end = src.cursor >= MY_MIN && src.cursor < ms.length ? src.cursor : ms.length;
+    $('mjInfo').textContent = `盤の手順（${ms.length}手）を、何手目までにするか選んで登録します。いま盤で見ている${src.cursor}手目が初めの値です`;
+    const n = $('mjN');
+    n.innerHTML = '';
+    const ja = movesJa(ms);
+    for (let k = MY_MIN; k <= ms.length; k++) n.insertAdjacentHTML('beforeend', `<option value="${k}">${k}手目 ${ja[k - 1]}</option>`);
+    n.value = String(end);
+    const gm = ms.map((u) => ({ move: usiToMove(u) }));
+    const guess = (side) => { const t = detectStrategy(STARTPOS, gm, side); return t === 'unknown' ? 'ibisha' : t; };
+    myStrategyOptions($('mjS'), guess(SENTE));
+    myStrategyOptions($('mjG'), guess(GOTE));
+    const h = src.g.header || {};
+    $('mjName').value = '';
+    $('mjName').placeholder = h['棋戦'] || h['先手'] ? `例：${[h['先手'], h['後手']].filter(Boolean).join(' 対 ')}` : '例：対ゴキゲン ▲５八金右超急戦';
+    $('btnMjSave').disabled = false;
+    $('btnMjSave').onclick = async () => {
+      if (!state.engineReady) { toast('エンジンの準備ができてから登録してください'); return; }
+      const k = Number(n.value);
+      const mv = ms.slice(0, k);
+      const moves = mv.join(' ');
+      const S = splitTag($('mjS').value), G = splitTag($('mjG').value);
+      const note = $('mjName').value.trim() || `${tagName($('mjS').value)} 対 ${tagName($('mjG').value)}（${k}手）`;
+      // 全部の手をエンジンで読み、互角の手順か、どこで差がついたかを調べる
+      $('btnMjSave').disabled = true;
+      const r = await evalMyLine(mv, (i) => { $('btnMjSave').textContent = `エンジンで読んでいます… ${i}/${k + 1}`; });
+      $('btnMjSave').disabled = false;
+      $('btnMjSave').textContent = '登録する';
+      if (!r) { toast('読みを中断しました。登録していません'); return; }
+      const all = myLines();
+      const same = all.findIndex((l) => l.moves === moves);
+      const rec = { id: same >= 0 ? all[same].id : `mj${Date.now().toString(36)}`, s: S.base, g: G.base, subS: S.sub, subG: G.sub, note, moves, evals: r.evals, cut: r.cut, cutLoss: r.cutLoss, created: new Date().toISOString() };
+      if (same >= 0) all[same] = rec; else all.push(rec);
+      try { saveMyLines(all); } catch { toast('保存できませんでした（端末の保存領域がいっぱいかもしれません）'); return; }
+      toast(`${same >= 0 ? '同じ手順を上書きしました。' : ''}「${note}」（${k}手）を${myKindText(rec, mv)}として登録しました`, 6000);
+      renderMyJosekiList();
+    };
+  }
+  if (!$('btnMjClose').onclick) {
+    $('btnMjClose').onclick = () => $('myJosekiSheet').classList.add('hidden');
+    $('myJosekiSheet').addEventListener('click', (e) => { if (e.target === $('myJosekiSheet')) $('myJosekiSheet').classList.add('hidden'); });
+    $('btnMjStudy').onclick = () => {
+      $('myJosekiSheet').classList.add('hidden');
+      openJosekiSheet();
+      if ([...$('jsStrategy').options].some((o) => o.value === 'mine')) { $('jsStrategy').value = 'mine'; $('jsView').value = 'list'; renderJosekiList(); }
+    };
+  }
+  renderMyJosekiList();
+  $('myJosekiSheet').classList.remove('hidden');
+}
+
+// 登録する手順の全部の局面をエンジンで読む。{ evals, cut, cutLoss }、シートを閉じたら null
+const MY_NODES = 'go nodes 100000';
+async function evalMyLine(mv, progress) {
+  stopReview();
+  engine.stop();
+  const pos = new Position();
+  const parts = [];
+  const vals = [];
+  const clip = (v) => Math.max(-9999, Math.min(9999, Math.round(v)));
+  for (let i = 0; i <= mv.length; i++) {
+    if ($('myJosekiSheet').classList.contains('hidden')) return null;
+    progress(i + 1);
+    const res = pos.legalMoves().length ? await engine.searchOnce({ sfen: pos.toSfen(), multipv: 1, go: MY_NODES }) : null;
+    const l = res && res.lines.find((x) => x && x.pv && x.pv[0]);
+    // 指す手がない（詰み）局面は手番側の負け
+    const v = l ? clip(lineValue(l)) : -9999;
+    vals.push(v);
+    if (i < mv.length) parts.push(l ? `${l.pv[0]}:${v}` : '-');
+    if (i < mv.length) pos.applyMove(usiToMove(mv[i]));
+  }
+  parts.push(String(vals[mv.length]));
+  let cut = null, cutLoss = null;
+  for (let i = 0; i < mv.length; i++) {
+    const loss = vals[i] + vals[i + 1]; // 指す前の手番側の値 − 指したあとの（同じ側から見た）値
+    if (loss > MY_CUT) { cut = i; cutLoss = Math.round(loss); break; }
+  }
+  return { evals: parts.join(' '), cut, cutLoss };
+}
+
+// 登録した手順の種類の説明
+function myKindText(l, mv = l.moves.split(' ')) {
+  if (l.cut == null) return l.evals ? '互角の定跡（AIも指す・勉強にも出る）' : '定跡（AIも指す・勉強にも出る）';
+  const ja = movesJa(mv.slice(0, l.cut + 1))[l.cut];
+  const ai = l.cut >= MY_AI_MIN ? `${l.cut}手目まではAIも指す` : 'AIは使わない';
+  return `勉強用の手順（${l.cut + 1}手目${ja}で約${l.cutLoss}の差。${ai}）`;
+}
+
+function renderMyJosekiList() {
+  const el = $('mjList');
+  el.innerHTML = '';
+  const all = myLines();
+  $('btnMjStudy').classList.toggle('hidden', !all.length);
+  if (!all.length) { el.innerHTML = '<div class="pf-sub">まだありません</div>'; return; }
+  for (const l of all.slice().reverse()) {
+    const ms = l.moves.split(' ');
+    const d = document.createElement('div');
+    d.className = 'mj-item';
+    d.innerHTML = '<div class="mj-text"><span></span><span class="js-sub"></span><span class="js-sub"></span></div><button class="sub mj-del">削除</button>';
+    d.querySelector('span').textContent = l.note;
+    const tn = (b, sub) => tagName(sub || b);
+    const subs = d.querySelectorAll('.js-sub');
+    subs[0].textContent = `${tn(l.s, l.subS)} 対 ${tn(l.g, l.subG)}・${ms.length}手　…${movesJa(ms).slice(-3).join(' ')}`;
+    subs[1].textContent = myKindText(l);
+    d.querySelector('.mj-del').onclick = async () => {
+      const r = await confirmSheet(`「${l.note}」を削除しますか？`, '削除');
+      if (!r.ok) return;
+      saveMyLines(myLines().filter((y) => y.id !== l.id));
+      renderMyJosekiList();
+    };
+    el.appendChild(d);
+  }
 }
 
 function renderJosekiList() {
@@ -1923,6 +2081,20 @@ function josekiAsk(k) {
   pr.judge = judgeSearch(pos.toSfen(), pr.ext ? 3 : 5, 'go movetime 1500');
   let ask = pr.ext ? '定跡のあとの局面です。よい手を指してください' : `${josekiWord()}の手を指してください`;
   const c = pr.line.chapter;
+  // 自分の定跡（一覧から）：前の問題からここまでに大きく損した手があれば知らせる
+  if (!c && !pr.ext && pr.line.bads && pr.line.bads.length) {
+    const i = pr.points.indexOf(k);
+    const prev = i > 0 ? pr.points[i - 1] : -1;
+    const b = pr.line.bads.find((x) => x.ply < k && x.ply > prev);
+    if (b) {
+      const bp = josekiPos(b.ply);
+      const prevTo = b.ply > 0 ? usiToMove(pr.moves[b.ply - 1]).to : null;
+      const ja = moveToJa(bp, usiToMove(pr.moves[b.ply]), prevTo);
+      const best = moveToJa(bp, usiToMove(b.best), prevTo);
+      const mine = b.ply % 2 === pr.side;
+      ask = `${ja}は${mine ? 'こちらの' : ''}悪手です（最善は${best}、評価値で約${b.loss}の損）。${mine ? 'この手順はここから不利になります。続きの手を指してください' : 'とがめる手を指してください'}`;
+    }
+  }
   if (c) {
     const i = pr.points.indexOf(k);
     const prev = i > 0 ? pr.points[i - 1] : c.base - 1;

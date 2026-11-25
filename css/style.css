@@ -271,3 +271,10 @@ body.noscroll { overflow: hidden; }
 .js-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; margin: 6px 0; }
 .js-list button { text-align: left; font-size: 14px; padding: 10px; margin: 0; }
 .js-list .js-sub { display: block; font-size: 12px; opacity: 0.75; margin-top: 2px; }
+
+/* 自分の定跡の一覧 */
+.mj-item { display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 8px; background: rgba(255,255,255,0.06); }
+.mj-text { flex: 1; min-width: 0; font-size: 14px; }
+.mj-text .js-sub { display: block; font-size: 12px; opacity: 0.75; margin-top: 2px; }
+.mj-item button { margin: 0; padding: 6px 8px; font-size: 12px; white-space: nowrap; width: auto; }
+#mjName { flex: 1; min-width: 0; margin-left: 8px; font-size: 15px; padding: 6px; border-radius: 6px; background: #1a140e; color: var(--text); border: 1px solid #555; }
