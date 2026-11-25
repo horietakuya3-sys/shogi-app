@@ -11,6 +11,8 @@ import { SN4_LINES } from './joseki_sn4.js';
 import { SL_LINES } from './joseki_sl.js';
 import { SL2_LINES } from './joseki_sl2.js';
 import { POINTS } from './joseki_points.js';
+import { EVALS } from './joseki_evals.js';
+import { SUCCESS_LINES } from './joseki_success.js';
 
 export const LINES = [
   // 相矢倉（24手組）
@@ -305,4 +307,118 @@ export function gamePoints(moves, side) {
   const step = rest.length / Math.max(1, want - sel.length);
   for (let i = 0; sel.length < want && i < rest.length; i += Math.max(1, step)) sel.push(rest[Math.floor(i)]);
   return [...new Set(sel)].sort((a, b) => a - b);
+}
+
+// ---- 章立て（定跡書のように：基本図 → 成功例 → 最善を尽くして互角の変化） ----
+// 定跡の手順が分かれる局面を「基本図」にし、そこから分かれる手順を、最後の局面の評価値（勉強する側から見た値）で分ける。
+// +300以上：成功例（狙い筋が決まる。相手の悪手を示す）、-300以下：失敗例、そのあいだ：互角の変化。評価値は js/joseki_evals.js
+export const CH_MIN_BASE = 8; // これより手前の分かれ目は章にしない
+export const CH_SUCCESS = 300;
+export const CH_BAD = 120; // 成功例で、相手の手がこれ以上損なら「悪手」として示す
+function lineEvals(l) {
+  const e = EVALS[lineKey(l.moves)];
+  if (!e) return null;
+  const t = e.split(' ');
+  const final = t.pop();
+  return { plies: t.map((x) => { if (x === '-') return null; const i = x.lastIndexOf(':'); return { best: x.slice(0, i), v: Number(x.slice(i + 1)) }; }), final: final === '-' ? null : Number(final) };
+}
+const shortTitle = (l) => (l.note ? l.note.replace(/（.*?）/g, '') : `${tagName(l.s)} 対 ${tagName(l.g)}`);
+
+// 分かれ目 b からの1本の手順を、章の中の変化（成功例・互角・失敗例）にする
+function chapterVar(rep, b, side) {
+  const m = rep.moves.split(' ');
+  if (m.length - b < 4) return null;
+  const ev = lineEvals(rep);
+  if (!ev || ev.final == null) return null;
+  const n = m.length;
+  const final = (n % 2 === side ? 1 : -1) * ev.final; // 勉強する側から見た最後の評価値
+  // 相手のいちばん大きな損の手（成功例の「やらせ」の手）
+  let bad = null;
+  for (let k = b; k < n; k++) {
+    if (k % 2 === side || !ev.plies[k]) continue;
+    const after = k + 1 < n ? (ev.plies[k + 1] ? -ev.plies[k + 1].v : null) : -ev.final;
+    if (after == null) continue;
+    const loss = ev.plies[k].v - after;
+    if (m[k] !== ev.plies[k].best && loss >= CH_BAD && (!bad || loss > bad.loss)) bad = { ply: k, best: ev.plies[k].best, loss: Math.round(loss) };
+  }
+  const kind = final >= CH_SUCCESS ? 'success' : final <= -CH_SUCCESS ? 'fail' : 'even';
+  return { line: rep, kind, final: Math.round(final), bad: kind === 'success' ? bad : null, title: shortTitle(rep) };
+}
+const CH_ORDER = { success: 0, even: 1, fail: 2 };
+function finishChapter(ch) {
+  ch.vars.sort((x, y) => CH_ORDER[x.kind] - CH_ORDER[y.kind] || y.final - x.final);
+  for (const k of ['success', 'even', 'fail']) ch[k] = ch.vars.filter((v) => v.kind === k).length;
+  return ch;
+}
+
+export function josekiChapters(tag, side) {
+  const lines = studyLines().filter((l) => lineTags(l, side).includes(tag));
+  const kids = new Map(); // 基本図までの手順 → (次の手 → その手を通る手順)
+  for (const l of lines) {
+    const m = l.moves.split(' ');
+    for (let b = CH_MIN_BASE; b < m.length; b++) {
+      const key = m.slice(0, b).join(' ');
+      if (!kids.has(key)) kids.set(key, new Map());
+      const c = kids.get(key);
+      if (!c.has(m[b])) c.set(m[b], []);
+      c.get(m[b]).push(l);
+    }
+  }
+  const varsAt = (key) => {
+    const b = key.split(' ').length;
+    const vars = [];
+    for (const [, ls] of kids.get(key) || []) {
+      const rep = ls.slice().sort((x, y) => y.moves.length - x.moves.length)[0];
+      const v = chapterVar(rep, b, side);
+      if (v) vars.push(v);
+    }
+    return vars;
+  };
+  const byKey = new Map();
+  for (const [key, c] of kids) {
+    if (c.size < 2) continue;
+    const vars = varsAt(key);
+    // 同じ定跡（題名が同じ手順）の中の分かれ目だけを章にする。別の記事の手順が手順前後で分かれて見えるだけのものは除く
+    const tc = new Map();
+    for (const v of vars) tc.set(v.title, (tc.get(v.title) || 0) + 1);
+    const top = [...tc].sort((x, y) => y[1] - x[1])[0];
+    if (!top || top[1] < 2) continue;
+    byKey.set(key, { key, base: key.split(' ').length, side, title: top[0], vars: vars.filter((v) => v.title === top[0]) });
+  }
+  // 成功例専用の手順（相手の悪手で切った元の手順）を、定跡の手順と分かれるところの章に足す
+  for (const sl of SUCCESS_LINES) {
+    if (sl.side !== side || !lineTags(sl, side).includes(tag)) continue;
+    const m = sl.moves.split(' ');
+    let shared = 0;
+    for (const l of lines) {
+      const lm = l.moves.split(' ');
+      let i = 0;
+      while (i < lm.length && i < m.length && lm[i] === m[i]) i++;
+      shared = Math.max(shared, i);
+    }
+    const top = Math.min(shared, sl.k);
+    if (top < CH_MIN_BASE) continue;
+    const v = chapterVar(sl, 0, side);
+    if (!v || v.kind !== 'success') continue;
+    const ev = lineEvals(sl);
+    if (ev && ev.plies[sl.k]) v.bad = { ply: sl.k, best: ev.plies[sl.k].best, loss: sl.loss };
+    v.extra = true;
+    // いちばん深い既存の章 → 分かれ目 → 悪手の少し手前、の順に基本図を決める
+    let b = top;
+    while (b >= CH_MIN_BASE && !byKey.has(m.slice(0, b).join(' '))) b--;
+    if (b < CH_MIN_BASE) {
+      b = top;
+      while (b >= CH_MIN_BASE && !((kids.get(m.slice(0, b).join(' ')) || new Map()).size >= 2)) b--;
+      if (b < CH_MIN_BASE) b = Math.max(CH_MIN_BASE, sl.k - 4);
+      const key = m.slice(0, b).join(' ');
+      const others = varsAt(key).filter((x) => !sl.moves.startsWith(x.line.moves));
+      byKey.set(key, { key, base: b, side, title: v.title, vars: others });
+    }
+    byKey.get(m.slice(0, b).join(' ')).vars.push(v);
+  }
+  const chapters = [...byKey.values()].map(finishChapter);
+  // 成功例と互角の変化の両方がある章を先に、そのあとは成功例のある章、基本図の手数の順
+  const rank = (c) => (c.success > 0 && c.even > 0 ? 0 : c.success > 0 ? 1 : 2);
+  chapters.sort((x, y) => rank(x) - rank(y) || x.base - y.base);
+  return chapters;
 }

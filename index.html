@@ -214,9 +214,10 @@
 <div class="sheet hidden" id="josekiSheet">
   <div class="sheet-inner">
     <div class="sheet-title">定跡の勉強</div>
-    <div class="pf-sub">定跡のポイントの手を当てたあと、その先をエンジン相手に5手指し、終わると一覧の次の定跡に続きます。間違えてもやり直せます。盤に読み込んだ棋譜（プロの棋譜など）の序盤でも勉強できます。</div>
+    <div class="pf-sub">定跡のポイントの手を当てたあと、その先をエンジン相手に5手指し、終わると一覧の次の定跡に続きます。章立てにすると、定跡書のように基本図から成功例（相手が悪手を指して狙い筋が決まる手順）、最善を尽くして互角になる変化の順に指せます。間違えてもやり直せます。盤に読み込んだ棋譜（プロの棋譜など）の序盤でも勉強できます。</div>
     <div class="row"><span>戦法</span><select id="jsStrategy"></select></div>
     <div class="row"><span>手番</span><select id="jsSide"><option value="0">先手で</option><option value="1">後手で</option></select></div>
+    <div class="row"><span>形式</span><select id="jsView"><option value="list">定跡の一覧</option><option value="ch">章立て（基本図→成功例→互角の変化）</option></select></div>
     <div id="jsList" class="js-list"></div>
     <button id="btnJsGame" class="hidden">盤に読み込んだ棋譜の序盤で勉強する</button>
     <button id="btnJsClose" class="sub">閉じる</button>

@@ -6,7 +6,7 @@ import { parseGameText, toKif, decodeBytes } from './kif.js';
 import { Engine } from './engine.js';
 import { AiPlayer, LEVELS, STRATEGIES, CASTLES, castleFits } from './ai.js';
 import { loadBook, bookReady } from './book.js';
-import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES } from './joseki.js';
+import { studyLines, studyPoints, gamePoints, lineTags, STUDY_TAGS, tagName, anyJosekiMoves, SUB_RULES, josekiChapters } from './joseki.js';
 import { analyzeGame, judgeMoves, summarize, scoreForGraph, senteWinRate, DEPTHS } from './review.js';
 import { playPieceSound, playBeep, unlockAudio } from './sound.js';
 import { speechSupported, speakMove, speakClock, speakEnd, speakInterrupt, setVoice, loadVoice, VOICES } from './speech.js';
@@ -1722,6 +1722,7 @@ function openJosekiSheet() {
       .map((t) => `<option value="${t}">${isSub(t) ? '　' : ''}${tagName(t)}</option>`).join('');
     sel.onchange = renderJosekiList;
     $('jsSide').onchange = renderJosekiList;
+    $('jsView').onchange = renderJosekiList;
     $('btnJsClose').onclick = () => $('josekiSheet').classList.add('hidden');
     $('josekiSheet').addEventListener('click', (e) => { if (e.target === $('josekiSheet')) $('josekiSheet').classList.add('hidden'); });
   }
@@ -1744,6 +1745,7 @@ function openJosekiSheet() {
 function renderJosekiList() {
   const tag = $('jsStrategy').value;
   const side = Number($('jsSide').value);
+  if ($('jsView').value === 'ch') { renderChapterList(tag, side); return; }
   // 選んだ手番の定跡を先に、その戦法がもう一方の手番にしかない定跡はそのあとに（その手番で出す）
   const all = studyLines();
   const mine = all.filter((l) => lineTags(l, side).includes(tag)).map((l) => [l, side]);
@@ -1778,6 +1780,60 @@ function renderJosekiList() {
     b.onclick = () => { $('josekiSheet').classList.add('hidden'); startJosekiStudy(l, sd, list.slice(i + 1)); };
     el.appendChild(b);
   }
+}
+
+// 手順を日本語の指し手に（最後の数手を見せる・悪手の説明に使う）
+function movesJa(ms) {
+  const p = new Position();
+  const ja = [];
+  let prevTo = null;
+  for (const u of ms) {
+    const mv = usiToMove(u);
+    ja.push(moveToJa(p, mv, prevTo));
+    prevTo = mv.to;
+    p.applyMove(mv);
+  }
+  return ja;
+}
+
+const CH_KIND = { success: '成功例', even: '互角の変化', fail: '失敗例' };
+const CH_POINTS_MAX = 10;
+
+// 章立て：定跡書のように、基本図 → 成功例（相手が悪手を指して狙い筋が決まる）→ 最善を尽くして互角になる変化、の順に指す
+function renderChapterList(tag, side) {
+  const el = $('jsList');
+  el.innerHTML = '';
+  const chs = josekiChapters(tag, side).filter((c) => c.vars.length >= 2 || c.success > 0);
+  if (!chs.length) { el.innerHTML = `<div class="pf-sub">${side === SENTE ? '先手' : '後手'}で指す${tagName(tag)}の章はまだありません。手番を変えるか、一覧で勉強してください</div>`; return; }
+  for (const [i, ch] of chs.entries()) {
+    const ms = ch.key.split(' ');
+    const b = document.createElement('button');
+    b.innerHTML = `<span></span><span class="js-sub"></span>`;
+    const cnt = ['success', 'even', 'fail'].filter((k) => ch[k]).map((k) => `${CH_KIND[k]}${ch[k]}`).join('・');
+    b.firstChild.textContent = `${side === SENTE ? '☗' : '☖'}${ch.title}（基本図${ms.length}手目・${cnt}）`;
+    b.lastChild.textContent = `基本図まで …${movesJa(ms).slice(-3).join(' ')}`;
+    b.onclick = () => { $('josekiSheet').classList.add('hidden'); startChapter(ch, chs.slice(i + 1)); };
+    el.appendChild(b);
+  }
+}
+
+// 章の変化を1本ずつ定跡の手順として指す。基本図から先の自分の手を問題にし、定跡のあとのエンジン相手の問題はしない
+function chapterQueue(ch, rest = []) {
+  const q = ch.vars.map((v, i) => {
+    const n = v.line.moves.split(' ').length;
+    const pts = [];
+    for (let k = ch.base; k < n && pts.length < CH_POINTS_MAX; k++) if (k % 2 === ch.side) pts.push(k);
+    const same = ch.vars.filter((x) => x.kind === v.kind);
+    const label = `${CH_KIND[v.kind]}${same.length > 1 ? same.indexOf(v) + 1 : ''}`;
+    return [{ title: `${ch.title} ${label}`, s: v.line.s, g: v.line.g, moves: v.line.moves, points: pts, noExt: true, chapter: { ...v, base: ch.base, label, idx: i, n: ch.vars.length, rest } }, ch.side];
+  });
+  return q;
+}
+
+function startChapter(ch, rest) {
+  const [first, ...q] = chapterQueue(ch, rest);
+  startJosekiStudy(first[0], first[1], q);
+  toast(`基本図（${ch.base}手目）から、${ch.vars.map((v) => CH_KIND[v.kind]).filter((x, i, a) => a.indexOf(x) === i).join('→')}の順に指します`, 4000);
 }
 
 const EXT_MAX = 5; // 定跡の手順が終わったあと、エンジンを相手に続けて指す問題の数
@@ -1828,6 +1884,7 @@ async function josekiNext() {
     // ポイントの手だけを問題にし、あいだの手は進めておく
     const k = pr.points.find((x) => x > pr.k);
     if (k != null) { josekiAsk(k); return; }
+    if (pr.line.noExt) { chapterVarEnd(); return; }
     // 定跡の手順が終わったら、その先をエンジン相手に続ける
     pr.moves = pr.moves.slice(0, pr.lineLen);
     pr.ext = { n: 0 };
@@ -1864,7 +1921,21 @@ function josekiAsk(k) {
   state.flipped = pr.side === GOTE;
   const pos = josekiPos(k);
   pr.judge = judgeSearch(pos.toSfen(), pr.ext ? 3 : 5, 'go movetime 1500');
-  const ask = pr.ext ? '定跡のあとの局面です。よい手を指してください' : `${josekiWord()}の手を指してください`;
+  let ask = pr.ext ? '定跡のあとの局面です。よい手を指してください' : `${josekiWord()}の手を指してください`;
+  const c = pr.line.chapter;
+  if (c) {
+    const i = pr.points.indexOf(k);
+    const prev = i > 0 ? pr.points[i - 1] : c.base - 1;
+    const pre = i === 0 ? `基本図（${c.base}手目）から、${c.label}（${c.idx + 1}/${c.n}）。` : '';
+    // 成功例：相手の悪手（やらせの手）を、指されたところで知らせる
+    if (c.bad && c.bad.ply < k && c.bad.ply > prev) {
+      const bp = josekiPos(c.bad.ply);
+      const prevTo = c.bad.ply > 0 ? usiToMove(pr.moves[c.bad.ply - 1]).to : null;
+      const ja = moveToJa(bp, usiToMove(pr.moves[c.bad.ply]), prevTo);
+      const best = moveToJa(bp, usiToMove(c.bad.best), prevTo);
+      ask = `${pre}${ja}は悪手です（最善は${best}、評価値で約${c.bad.loss}の損）。とがめる手を指してください`;
+    } else ask = `${pre}${ask}`;
+  }
   $('practiceInfo').textContent = `${josekiHead()}（${pos.turn === SENTE ? '☗先手' : '☖後手'}の番）。${ask}`;
   $('btnPracticeShow').classList.remove('hidden');
   $('btnPracticeNext').classList.add('hidden');
@@ -1874,12 +1945,44 @@ function josekiAsk(k) {
   update();
 }
 
+// 章の変化の終わり：最後の局面まで進め、勉強する側から見た評価値で結果を出す
+function chapterVarEnd() {
+  const pr = state.practice;
+  const c = pr.line.chapter;
+  if (pr.chEnd) { josekiLineDone(); return; }
+  pr.chEnd = true;
+  pr.phase = 'done';
+  josekiSetBoard(pr.lineLen);
+  state.candidates = [];
+  const me = pr.side === SENTE ? '先手' : '後手';
+  const v = `${c.final > 0 ? '+' : ''}${c.final}`;
+  const res = c.kind === 'success' ? `成功：${me}がはっきり良くなりました（${me}から見て評価値${v}）`
+    : c.kind === 'even' ? `互角：お互いに最善を尽くすと、このくらいの形勢です（${me}から見て${v}）`
+      : `失敗：${me}が悪くなる変化です（${me}から見て${v}）`;
+  const next = pr.queue.length ? `次は${pr.queue[0][0].chapter.label}` : c.rest && c.rest.length ? `次の章（${c.rest[0].title}）へ` : '';
+  $('practiceInfo').textContent = `${pr.line.title}（${pr.lineLen}手目まで）　${res}。${next ? `「次の問題」で${next}` : '「次の問題」で終わります'}`;
+  for (const id of ['btnPracticeShow', 'btnPracticeRetry']) $(id).classList.add('hidden');
+  $('btnPracticeNext').classList.remove('hidden');
+  $('btnPracticeExplore').classList.remove('hidden');
+  $('btnPracticeExplore').textContent = '検討';
+  renderCandidates([], '◀▶で手順を見直せます');
+  update();
+}
+
 // 1本終わったら、同じ戦法の次の定跡へ続ける
 function josekiLineDone() {
   const pr = state.practice;
   const t = pr.total;
   t.asked += pr.asked; t.right += pr.right; t.lines++;
   const msg = `${pr.line.title}はここまで（${pr.asked}問中 ${pr.right}問を1回で正解）`;
+  const rest = pr.line.chapter && pr.line.chapter.rest;
+  if (!pr.queue.length && rest && rest.length) {
+    const [ch, ...more] = rest;
+    const [first, ...q] = chapterQueue(ch, more);
+    toast(`${msg}。次の章：${ch.title}（基本図${ch.base}手目）`, 4000);
+    startJosekiStudy(first[0], first[1], q, t);
+    return;
+  }
   if (!pr.queue.length) {
     toast(`${msg}。${t.lines > 1 ? `今回は${t.lines}本・${t.asked}問中 ${t.right}問を1回で正解でした` : ''}`, 5000);
     endPractice();
@@ -1931,8 +2034,11 @@ async function josekiAnswer(mv) {
   if (pr.first) pr.asked++;
   pr.lines = lines;
   pr.phase = 'done';
-  const ok = pr.ext ? isBest || (loss != null && loss <= EXT_PASS) : isLine;
+  // 章立ての変化では、手順の手でなくても最善手なら正解にする（この先は手順の手で進める）
+  const chBest = !!pr.line.chapter && !isLine && isBest;
+  const ok = pr.ext ? isBest || (loss != null && loss <= EXT_PASS) : isLine || chBest;
   let msg;
+  if (chBest) msg = `正解！ ${myJa}は最善手です。この先は手順の${moveToJa(pos, usiToMove(pr.moves[k]), prevTo)}で進めます`;
   // 定跡（棋譜）の手と一致したら正解。エンジンの最善手と違っても、そのことは言わない
   if (isLine) msg = `正解！ ${myJa}は${josekiWord()}の手です`;
   else if (pr.ext && ok) msg = isBest ? `正解！ ${myJa}は最善手です` : `正解！ ${myJa}は${kind(rank, loss)}です（${diff}）`;
