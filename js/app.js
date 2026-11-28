@@ -1997,7 +1997,8 @@ function startChapter(ch, rest) {
 const EXT_MAX = 5; // 定跡の手順が終わったあと、エンジンを相手に続けて指す問題の数
 const EXT_PASS = 80; // その先の問題で、最善からこの差までなら正解
 
-function startJosekiStudy(l, side, queue = [], total = null) {
+// hist：この勉強で前に指した手順 [{ line, side, asked, right }]（前の問題に戻るため）。atEnd：最後の問題から始める
+function startJosekiStudy(l, side, queue = [], total = null, hist = [], atEnd = false) {
   if (!state.engineReady) { toast('エンジンの準備ができてから始めてください'); return; }
   stopReview();
   engine.stop();
@@ -2006,10 +2007,58 @@ function startJosekiStudy(l, side, queue = [], total = null) {
   const points = l.points ? l.points.filter((k) => k % 2 === side) : studyPoints(l, side);
   state.practice = {
     type: 'joseki', line: l, side, moves: l.moves.split(' '), lineLen: l.moves.split(' ').length, points, k: -1, phase: 'ask',
-    right: 0, asked: 0, ext: null, queue, total: total || { asked: 0, right: 0, lines: 0 },
+    right: 0, asked: 0, ext: null, queue, total: total || { asked: 0, right: 0, lines: 0 }, hist, seen: new Set(),
   };
   $('practiceBar').classList.remove('hidden');
-  josekiNext();
+  if (atEnd && points.length) josekiAsk(points[points.length - 1]);
+  else josekiNext();
+}
+
+// ---- 前の問題に戻る ----
+// その先（エンジン相手）の問題 → 1つ前のその先の問題か、定跡の最後のポイント。ポイント → 1つ前のポイント。最初のポイント → 前の定跡の最後の問題
+function josekiPrevTarget() {
+  const pr = state.practice;
+  if (!pr || pr.type !== 'joseki') return null;
+  if (pr.phase === 'judging' || pr.phase === 'wait') return null;
+  if (pr.chEnd) return pr.points.length ? { k: pr.points[pr.points.length - 1] } : null;
+  if (pr.ext) {
+    if (pr.ext.n > 1) return { k: pr.k - 2, ext: true };
+    return pr.points.length ? { k: pr.points[pr.points.length - 1] } : pr.hist.length ? { line: true } : null;
+  }
+  const prev = pr.points.filter((x) => x < pr.k);
+  if (prev.length) return { k: prev[prev.length - 1] };
+  return pr.hist.length ? { line: true } : null;
+}
+
+function josekiPrev() {
+  const pr = state.practice;
+  const t = josekiPrevTarget();
+  if (!t) return;
+  if (pr.phase === 'explore') josekiExploreEnd();
+  pr.beforeExplore = null;
+  if (t.line) {
+    // 前の定跡に戻る。前の定跡の分の通算は引いておく（もう一度数えるので）
+    const h = pr.hist[pr.hist.length - 1];
+    const tot = pr.total;
+    tot.lines--; tot.asked -= h.asked; tot.right -= h.right;
+    startJosekiStudy(h.line, h.side, [[pr.line, pr.side], ...pr.queue], tot, pr.hist.slice(0, -1), true);
+    return;
+  }
+  pr.chEnd = false;
+  if (t.ext) {
+    pr.ext.n--;
+    pr.moves = pr.moves.slice(0, t.k);
+  } else if (pr.ext) {
+    pr.ext = null;
+    pr.moves = pr.moves.slice(0, pr.lineLen);
+  }
+  josekiAsk(t.k);
+}
+
+function updatePrevBtn() {
+  const pr = state.practice;
+  const show = !!pr && pr.type === 'joseki' && pr.phase !== 'explore' && !!josekiPrevTarget();
+  $('btnPracticePrev').classList.toggle('hidden', !show);
 }
 
 function josekiSetBoard(n) {
@@ -2073,7 +2122,10 @@ function josekiAsk(k) {
   const pr = state.practice;
   pr.k = k;
   pr.phase = 'ask';
-  pr.first = true;
+  // 前の問題に戻って解き直した問題は、正解数・問題数に数えない
+  const key = `${pr.ext ? 'e' : 'p'}${k}`;
+  pr.first = !pr.seen.has(key);
+  pr.seen.add(key);
   pr.lines = null;
   josekiSetBoard(k);
   state.flipped = pr.side === GOTE;
@@ -2152,7 +2204,7 @@ function josekiLineDone() {
     const [ch, ...more] = rest;
     const [first, ...q] = chapterQueue(ch, more);
     toast(`${msg}。次の章：${ch.title}（基本図${ch.base}手目）`, 4000);
-    startJosekiStudy(first[0], first[1], q, t);
+    startJosekiStudy(first[0], first[1], q, t, pr.hist.concat([{ line: pr.line, side: pr.side, asked: pr.asked, right: pr.right }]));
     return;
   }
   if (!pr.queue.length) {
@@ -2162,7 +2214,7 @@ function josekiLineDone() {
   }
   const [l, sd] = pr.queue[0];
   toast(`${msg}。次の定跡：${l.title}`, 4000);
-  startJosekiStudy(l, sd, pr.queue.slice(1), t);
+  startJosekiStudy(l, sd, pr.queue.slice(1), t, pr.hist.concat([{ line: pr.line, side: pr.side, asked: pr.asked, right: pr.right }]));
 }
 
 async function josekiAnswer(mv) {
@@ -2486,6 +2538,7 @@ function restore() {
 }
 
 function update() {
+  updatePrevBtn();
   $('btnNewGame').classList.toggle('hidden', state.mode !== 'study');
   renderLabels();
   renderBoard();
@@ -2644,6 +2697,7 @@ function bindUi() {
   $('btnPracticeRetry').onclick = () => retryPractice();
   $('btnPracticeEnd').onclick = () => endPractice();
   $('btnPracticeExplore').onclick = () => josekiExplore();
+  $('btnPracticePrev').onclick = () => josekiPrev();
 
   // 局後解析
   $('btnReviewStop').onclick = stopReview;
